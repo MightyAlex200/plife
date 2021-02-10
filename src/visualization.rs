@@ -1,6 +1,6 @@
 use crate::simulation::Simulation;
 use ggez::{
-    event::{EventHandler, MouseButton},
+    event::{EventHandler, KeyCode, MouseButton},
     graphics::{self, Color, DrawMode, DrawParam, MeshBuilder, Text, Transform},
     input, Context, GameResult,
 };
@@ -12,6 +12,7 @@ pub struct Visualization {
     pub ticks: u64,
     pub camera_offset: Vec2,
     pub zoom: f32,
+    pub ticks_per_frame: u16,
 }
 
 impl Visualization {
@@ -29,14 +30,17 @@ impl Visualization {
             ticks: 0,
             camera_offset: Vec2::new(0.0, 0.0),
             zoom: 1.0,
+            ticks_per_frame: 1,
         }
     }
 }
 
 impl EventHandler for Visualization {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
-        self.simulation.step();
-        self.ticks += 1;
+        for _ in 0..self.ticks_per_frame {
+            self.simulation.step();
+            self.ticks += 1;
+        }
 
         Ok(())
     }
@@ -52,6 +56,26 @@ impl EventHandler for Visualization {
     fn mouse_motion_event(&mut self, ctx: &mut Context, _x: f32, _y: f32, dx: f32, dy: f32) {
         if input::mouse::button_pressed(ctx, MouseButton::Left) {
             self.camera_offset += Vec2::from((dx, dy)) / self.zoom;
+        }
+    }
+
+    fn key_down_event(
+        &mut self,
+        _ctx: &mut Context,
+        keycode: KeyCode,
+        _keymods: ggez::event::KeyMods,
+        repeat: bool,
+    ) {
+        if repeat {
+            return;
+        }
+        let res = match keycode {
+            KeyCode::LBracket => self.ticks_per_frame.checked_sub(1),
+            KeyCode::RBracket => self.ticks_per_frame.checked_add(1),
+            _ => return,
+        };
+        if let Some(new) = res {
+            self.ticks_per_frame = new;
         }
     }
 

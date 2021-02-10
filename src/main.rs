@@ -2,7 +2,7 @@ mod simulation;
 mod visualization;
 
 use ggez::{
-    conf::{ModuleConf, NumSamples, WindowSetup},
+    conf::{ModuleConf, NumSamples, WindowMode, WindowSetup},
     event, ContextBuilder,
 };
 use simulation::*;
@@ -34,7 +34,7 @@ fn main(args: CLIAction) {
     match args {
         CLIAction::Run(template) => {
             let ruleset = Into::<RulesetTemplate>::into(template).generate();
-            let simulation = Simulation::new(1000, ruleset);
+            let simulation = Simulation::new(2000, ruleset);
 
             let visualization = Visualization::with_random_colors(simulation);
             let res = ContextBuilder::new("plife", "Taylor")
@@ -44,6 +44,11 @@ fn main(args: CLIAction) {
                     vsync: true,
                     icon: "".to_owned(),
                     srgb: false,
+                })
+                .window_mode(WindowMode {
+                    width: 1200.0,
+                    height: 800.0,
+                    ..Default::default()
                 })
                 .modules(ModuleConf {
                     gamepad: false,

@@ -1,5 +1,6 @@
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
+use rayon::prelude::*;
 
 pub type Float = f32;
 pub type Radius = Float;
@@ -132,7 +133,7 @@ impl Simulation {
 
     fn get_velocity(&self, p: &Point) -> Vec2 {
         self.points
-            .iter()
+            .par_iter()
             .map(|q| {
                 // _ type to silence rust-analysis from making huuuuge type!
                 let mut delta: _ = q.position - p.position;
@@ -189,13 +190,13 @@ impl Simulation {
     fn step_velocities(&mut self) {
         let velocities = self
             .points
-            .iter()
+            .par_iter()
             .map(|p| self.get_velocity(p))
             .collect::<Vec<Vec2>>();
 
-        for (i, p) in self.points.iter_mut().enumerate() {
+        self.points.par_iter_mut().enumerate().for_each(|(i, p)| {
             p.velocity = velocities[i];
-        }
+        });
     }
 
     pub fn step(&mut self) {

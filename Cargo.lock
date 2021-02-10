@@ -1973,6 +1973,7 @@ dependencies = [
  "paw",
  "rand 0.8.3",
  "rand_distr",
+ "rayon",
  "structopt",
 ]
 
