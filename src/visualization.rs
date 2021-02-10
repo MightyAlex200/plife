@@ -47,9 +47,9 @@ impl EventHandler for Visualization {
 
     fn mouse_wheel_event(&mut self, _ctx: &mut Context, _x: f32, y: f32) {
         if y > 0.0 {
-            self.zoom *= 2.0;
+            self.zoom *= 1.1;
         } else if y < 0.0 {
-            self.zoom /= 2.0;
+            self.zoom /= 1.1;
         }
     }
 
