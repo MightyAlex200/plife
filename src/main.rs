@@ -1,17 +1,34 @@
 mod simulation;
 mod visualization;
 
+use std::convert::TryInto;
+
 use ggez::{
     conf::{ModuleConf, NumSamples, WindowMode, WindowSetup},
     event, ContextBuilder,
 };
 use simulation::*;
-use structopt::StructOpt;
+use structopt::{clap::arg_enum, StructOpt};
 use visualization::*;
 
 #[derive(StructOpt)]
-enum RulesetTemplateCLI {
-    Diversity,
+/// Particle life simulator
+enum CLIAction {
+    /// Run and display a simulation
+    Run {
+        #[structopt(long)]
+        ruleset: RulesetTemplateCLI,
+        #[structopt(long)]
+        walls: WallsCLI,
+        #[structopt(long, required_ifs(&[("walls", "square"), ("walls", "wrapping")]))]
+        wall_dist: Option<Float>,
+    },
+}
+
+arg_enum! {
+    enum RulesetTemplateCLI {
+        Diversity,
+    }
 }
 
 impl Into<RulesetTemplate> for RulesetTemplateCLI {
@@ -22,19 +39,36 @@ impl Into<RulesetTemplate> for RulesetTemplateCLI {
     }
 }
 
-#[derive(StructOpt)]
-/// Particle life simulator
-enum CLIAction {
-    /// Run and display a simulation
-    Run(RulesetTemplateCLI),
+arg_enum! {
+    pub enum WallsCLI {
+        None,
+        Square,
+        Wrapping,
+    }
+}
+
+impl TryInto<Walls> for (WallsCLI, Option<Float>) {
+    type Error = &'static str;
+    fn try_into(self) -> Result<Walls, Self::Error> {
+        match self {
+            (WallsCLI::None, _) => Ok(Walls::None),
+            (WallsCLI::Square, Some(f)) => Ok(Walls::Square(f)),
+            (WallsCLI::Wrapping, Some(f)) => Ok(Walls::Wrapping(f)),
+            _ => Err("Square and Wrapping walls require wall distance parameter."),
+        }
+    }
 }
 
 #[paw::main]
 fn main(args: CLIAction) {
     match args {
-        CLIAction::Run(template) => {
-            let ruleset = Into::<RulesetTemplate>::into(template).generate();
-            let simulation = Simulation::new(2000, ruleset);
+        CLIAction::Run {
+            ruleset,
+            walls,
+            wall_dist,
+        } => {
+            let ruleset = Into::<RulesetTemplate>::into(ruleset).generate();
+            let simulation = Simulation::new(2000, ruleset, (walls, wall_dist).try_into().unwrap());
 
             let visualization = Visualization::with_random_colors(simulation);
             let res = ContextBuilder::new("plife", "Taylor")

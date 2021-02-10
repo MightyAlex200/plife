@@ -17,11 +17,20 @@ pub struct Point {
 }
 
 impl Point {
-    pub fn generate(point_types: PointType) -> Self {
+    pub fn generate_normal(point_types: PointType) -> Self {
         let mut rng = thread_rng();
         let normal = Normal::new(0.0, 5.0).unwrap();
         Self {
             position: Vec2::new(rng.sample(normal), rng.sample(normal)),
+            point_type: rng.gen_range(0..point_types),
+            velocity: Vec2::zero(),
+        }
+    }
+
+    pub fn generate_uniform(point_types: PointType, dist: Float) -> Self {
+        let mut rng = thread_rng();
+        Self {
+            position: Vec2::new(rng.gen_range(-dist..dist), rng.gen_range(-dist..dist)),
             point_type: rng.gen_range(0..point_types),
             velocity: Vec2::zero(),
         }
@@ -115,42 +124,58 @@ pub const DIVERSITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
     min_friction: 0.05,
 };
 
+pub enum Walls {
+    None,
+    Square(Float),
+    Wrapping(Float),
+}
+
 pub struct Simulation {
     pub points: Vec<Point>,
     pub ruleset: Ruleset,
+    pub walls: Walls,
 }
 
 impl Simulation {
     pub const R_SMOOTH: Float = 2.0;
 
-    pub fn new(num_points: usize, ruleset: Ruleset) -> Self {
+    pub fn new(num_points: usize, ruleset: Ruleset, walls: Walls) -> Self {
         let mut points = Vec::with_capacity(num_points);
         (0..num_points).for_each(|_| {
-            points.push(Point::generate(ruleset.num_point_types));
+            let point = match walls {
+                Walls::None => Point::generate_normal(ruleset.num_point_types),
+                Walls::Square(dist) | Walls::Wrapping(dist) => {
+                    Point::generate_uniform(ruleset.num_point_types, dist)
+                }
+            };
+            points.push(point);
         });
-        Self { points, ruleset }
+        Self {
+            points,
+            ruleset,
+            walls,
+        }
     }
 
     fn get_velocity(&self, p: &Point) -> Vec2 {
         self.points
             .par_iter()
             .map(|q| {
-                // _ type to silence rust-analysis from making huuuuge type!
-                let mut delta: _ = q.position - p.position;
+                let mut delta = q.position - p.position;
 
-                //   if (this.wrap) {
-                //     if (dx > this.width * 0.5) {
-                //       dx -= this.width;
-                //     } else if (dx < -this.width * 0.5) {
-                //       dx += this.width;
-                //     }
+                if let Walls::Wrapping(wall_dist) = self.walls {
+                    if delta.x > wall_dist * 0.5 {
+                        delta.x -= wall_dist;
+                    } else if delta.x < -wall_dist * 0.5 {
+                        delta.x += wall_dist;
+                    }
 
-                //     if (dy > this.height * 0.5) {
-                //       dy -= this.height;
-                //     } else if (dy < -this.height * 0.5) {
-                //       dy += this.height;
-                //     }
-                //   }
+                    if delta.y > wall_dist * 0.5 {
+                        delta.y -= wall_dist;
+                    } else if delta.y < -delta.y * 0.5 {
+                        delta.y += wall_dist;
+                    }
+                }
 
                 // Get distance squared
                 let r2 = delta.x * delta.x + delta.y * delta.y;
@@ -208,36 +233,40 @@ impl Simulation {
             p.position += p.velocity;
             p.velocity *= 1.0 - self.ruleset.friction;
 
-            // // Check for wall collisions
-            // if (this.wrap) {
-            //   if (p.x < 0) {
-            //     p.x += this.width;
-            //   } else if (p.x >= this.width) {
-            //     p.x -= this.width;
-            //   }
+            // Check for wall collisions
+            match self.walls {
+                Walls::Wrapping(wall_dist) => {
+                    if p.position.x < -wall_dist {
+                        p.position.x += wall_dist * 2.0;
+                    } else if p.position.x >= wall_dist {
+                        p.position.x -= wall_dist * 2.0;
+                    }
 
-            //   if (p.y < 0) {
-            //     p.y += this.height;
-            //   } else if (p.y >= this.height) {
-            //     p.y -= this.height;
-            //   }
-            // } else {
-            //   if (p.x < DIAMETER) {
-            //     p.vx = -p.vx;
-            //     p.x = DIAMETER;
-            //   } else if (p.x >= this.width - DIAMETER) {
-            //     p.vx = -p.vx;
-            //     p.x = this.width - DIAMETER;
-            //   }
+                    if p.position.y < -wall_dist {
+                        p.position.y += wall_dist * 2.0;
+                    } else if p.position.y >= wall_dist {
+                        p.position.y -= wall_dist * 2.0;
+                    }
+                }
+                Walls::Square(wall_dist) => {
+                    if p.position.x < -wall_dist {
+                        p.velocity.x = -p.velocity.x;
+                        p.position.x = -wall_dist;
+                    } else if p.position.x >= wall_dist {
+                        p.velocity.x = -p.velocity.x;
+                        p.position.x = wall_dist;
+                    }
 
-            //   if (p.y < DIAMETER) {
-            //     p.vy = -p.vy;
-            //     p.y = DIAMETER;
-            //   } else if (p.y >= this.height - DIAMETER) {
-            //     p.vy = -p.vy;
-            //     p.y = this.height - DIAMETER;
-            //   }
-            // }
+                    if p.position.y < -wall_dist {
+                        p.velocity.y = -p.velocity.y;
+                        p.position.y = -wall_dist;
+                    } else if p.position.y >= wall_dist {
+                        p.velocity.y = -p.velocity.y;
+                        p.position.y = wall_dist;
+                    }
+                }
+                Walls::None => {}
+            }
         }
     }
 }
