@@ -164,16 +164,16 @@ impl Simulation {
                 let mut delta = q.position - p.position;
 
                 if let Walls::Wrapping(wall_dist) = self.walls {
-                    if delta.x > wall_dist * 0.5 {
-                        delta.x -= wall_dist;
-                    } else if delta.x < -wall_dist * 0.5 {
-                        delta.x += wall_dist;
+                    if delta.x > wall_dist {
+                        delta.x -= wall_dist * 2.0;
+                    } else if delta.x < -wall_dist {
+                        delta.x += wall_dist * 2.0;
                     }
 
-                    if delta.y > wall_dist * 0.5 {
-                        delta.y -= wall_dist;
-                    } else if delta.y < -delta.y * 0.5 {
-                        delta.y += wall_dist;
+                    if delta.y > wall_dist {
+                        delta.y -= wall_dist * 2.0;
+                    } else if delta.y < -wall_dist {
+                        delta.y += wall_dist * 2.0;
                     }
                 }
 
