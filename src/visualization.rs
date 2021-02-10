@@ -4,12 +4,13 @@ use ggez::{
     graphics::{self, Color, DrawMode, DrawParam, MeshBuilder, Text, Transform},
     input, Context, GameResult,
 };
+use glam::Vec2;
 
 pub struct Visualization {
     pub simulation: Simulation,
     pub colors: Vec<Color>,
     pub ticks: u64,
-    pub camera_offset: glam::Vec2, // TODO: use glam types everywhere
+    pub camera_offset: Vec2,
     pub zoom: f32,
 }
 
@@ -26,7 +27,7 @@ impl Visualization {
             simulation,
             colors,
             ticks: 0,
-            camera_offset: glam::Vec2::new(0.0, 0.0),
+            camera_offset: Vec2::new(0.0, 0.0),
             zoom: 1.0,
         }
     }
@@ -50,7 +51,7 @@ impl EventHandler for Visualization {
 
     fn mouse_motion_event(&mut self, ctx: &mut Context, _x: f32, _y: f32, dx: f32, dy: f32) {
         if input::mouse::button_pressed(ctx, MouseButton::Left) {
-            self.camera_offset += glam::Vec2::from((dx, dy)) / self.zoom;
+            self.camera_offset += Vec2::from((dx, dy)) / self.zoom;
         }
     }
 
@@ -74,11 +75,11 @@ impl EventHandler for Visualization {
         let draw_params = DrawParam {
             trans: Transform::Values {
                 dest: (self.camera_offset * self.zoom
-                    + glam::Vec2::from(ggez::graphics::size(ctx)) / 2.0)
+                    + Vec2::from(ggez::graphics::size(ctx)) / 2.0)
                     .into(),
                 rotation: 0.0,
-                scale: glam::Vec2::splat(self.zoom).into(),
-                offset: glam::Vec2::new(0.0, 0.0).into(),
+                scale: Vec2::splat(self.zoom).into(),
+                offset: Vec2::new(0.0, 0.0).into(),
             },
             ..Default::default()
         };

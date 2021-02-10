@@ -7,7 +7,7 @@ pub type Attraction = Float;
 pub type Friction = Float;
 pub type PointType = usize;
 
-pub type Vec2 = nalgebra::Vector2<Float>;
+pub type Vec2 = glam::Vec2;
 
 pub struct Point {
     pub position: Vec2,
@@ -22,7 +22,7 @@ impl Point {
         Self {
             position: Vec2::new(rng.sample(normal), rng.sample(normal)),
             point_type: rng.gen_range(0..point_types),
-            velocity: Vec2::zeros(),
+            velocity: Vec2::zero(),
         }
     }
 }
@@ -157,7 +157,7 @@ impl Simulation {
                 let max_r = self.ruleset.max_r[p.point_type][q.point_type];
 
                 if r2 > max_r * max_r || r2 < 0.01 {
-                    return Vec2::zeros();
+                    return Vec2::zero();
                 }
 
                 // Normalize displacement
@@ -181,6 +181,8 @@ impl Simulation {
 
                 delta * f
             })
+            .collect::<Vec<_>>()
+            .iter()
             .sum::<Vec2>()
     }
 
