@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 use crate::simulation::Simulation;
 use ggez::{
     event::{EventHandler, KeyCode, MouseButton},
@@ -13,6 +15,8 @@ pub struct Visualization {
     pub camera_offset: Vec2,
     pub zoom: f32,
     pub ticks_per_frame: u16,
+    ticks_just_now: u16,
+    last_update_duration: Duration,
 }
 
 impl Visualization {
@@ -31,16 +35,23 @@ impl Visualization {
             camera_offset: Vec2::new(0.0, 0.0),
             zoom: 1.0,
             ticks_per_frame: 1,
+            ticks_just_now: 0,
+            last_update_duration: Duration::from_millis(1),
         }
     }
 }
 
 impl EventHandler for Visualization {
     fn update(&mut self, _ctx: &mut Context) -> GameResult {
+        self.ticks_just_now = 0;
+        let start = Instant::now();
         for _ in 0..self.ticks_per_frame {
             self.simulation.step();
             self.ticks += 1;
+            self.ticks_just_now += 1;
         }
+        let end = Instant::now();
+        self.last_update_duration = end - start;
 
         Ok(())
     }
@@ -110,10 +121,13 @@ impl EventHandler for Visualization {
 
         graphics::draw(ctx, &mesh, draw_params)?;
 
+        let fps = (1.0 / ggez::timer::delta(ctx).as_secs_f32()) as u16;
+        let tps = ((1.0 / self.last_update_duration.as_secs_f32()) as u16).min(fps)
+            * self.ticks_per_frame;
+        let target_tps = self.ticks_per_frame * 60;
         let fps_text = Text::new(format!(
-            "fps: {}\ntps: {}",
-            ggez::timer::fps(ctx) as i32,
-            (self.ticks as f32 / ggez::timer::time_since_start(ctx).as_secs_f32()) as i32
+            "fps: {}\ntps: {}\ntarget tps: {}",
+            fps, tps, target_tps
         ));
 
         graphics::draw::<_, graphics::DrawParam>(ctx, &fps_text, Default::default())?;
