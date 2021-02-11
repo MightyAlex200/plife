@@ -98,6 +98,9 @@ pub struct Simulation {
     pub num_points: u64,
     pub ruleset: Ruleset,
     pub walls: Walls,
+    cache_max_r: Array<Radius>,
+    cache_min_r: Array<Radius>,
+    cache_attraction: Array<Attraction>,
 }
 
 impl Simulation {
@@ -129,31 +132,29 @@ impl Simulation {
             points.push(point);
         });
 
+        let types = randu::<PointType>(dims) % constant(ruleset.num_point_types, dims);
+
+        let idxr = || {
+            let mut idx = Indexer::default();
+            idx.set_index(&types, 0, None);
+            idx.set_index(&types, 1, None);
+            idx
+        };
+
         Self {
             positions: Array::new(&points, dims),
             velocities: constant(Complex::new(0.0, 0.0), dims),
-            types: randu::<PointType>(dims) % constant(ruleset.num_point_types, dims),
             num_points,
-            ruleset,
             walls,
+            cache_max_r: index_gen(&ruleset.max_r, idxr()),
+            cache_min_r: index_gen(&ruleset.min_r, idxr()),
+            cache_attraction: index_gen(&ruleset.attractions, idxr()),
+            types,
+            ruleset,
         }
     }
 
     fn get_velocities(&self) -> Array<Complex<f32>> {
-        let idxr = || {
-            let mut idx = Indexer::default();
-            idx.set_index(&self.types, 0, None);
-            idx.set_index(&self.types, 1, None);
-            idx
-        };
-
-        // These are the same every frame, it's probably quite costly to keep recreating them, so
-        // TODO: cache these
-
-        let max_r = index_gen(&self.ruleset.max_r, idxr());
-        let min_r = index_gen(&self.ruleset.min_r, idxr());
-        let attraction = index_gen(&self.ruleset.attractions, idxr());
-
         let squared_dim = Dim4::new(&[self.num_points, self.num_points, 1, 1]);
         let p = tile(&self.positions, Dim4::new(&[1, self.num_points, 1, 1]));
         let q = tile(
@@ -174,17 +175,17 @@ impl Simulation {
         }
         let dist = abs(&delta);
         let skip = or(
-            &gt(&dist, &max_r, false),
+            &gt(&dist, &self.cache_max_r, false),
             &le(&dist, &constant(0.01f32, squared_dim), false),
             false,
         );
-        let outside_minimum = gt(&dist, &min_r, false);
-        let numer = 2.0f32 * abs(&(&dist - 0.5f32 * (&max_r + &min_r)));
-        let denom = &max_r - &min_r;
-        let if_outside = attraction * (1.0f32 - numer / denom);
+        let outside_minimum = gt(&dist, &self.cache_min_r, false);
+        let numer = 2.0f32 * abs(&(&dist - 0.5f32 * (&self.cache_max_r + &self.cache_min_r)));
+        let denom = &self.cache_max_r - &self.cache_min_r;
+        let if_outside = &self.cache_attraction * (1.0f32 - numer / denom);
         let if_inside = Self::R_SMOOTH
-            * &min_r
-            * (1.0f32 / (&min_r + Self::R_SMOOTH) - 1.0f32 / (&dist + Self::R_SMOOTH));
+            * &self.cache_min_r
+            * (1.0f32 / (&self.cache_min_r + Self::R_SMOOTH) - 1.0f32 / (&dist + Self::R_SMOOTH));
         let force = &outside_minimum * if_outside + !&outside_minimum * if_inside;
         sum_nan(&(delta / dist * force * !&skip), 1, 0.0)
     }
