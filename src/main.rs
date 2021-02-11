@@ -20,6 +20,8 @@ enum CLIAction {
         ruleset: RulesetTemplateCLI,
         #[structopt(long)]
         walls: WallsCLI,
+        #[structopt(long, default_value = "1000")]
+        points: usize,
         #[structopt(long, required_ifs(&[("walls", "square"), ("walls", "wrapping")]))]
         wall_dist: Option<Float>,
     },
@@ -66,9 +68,11 @@ fn main(args: CLIAction) {
             ruleset,
             walls,
             wall_dist,
+            points,
         } => {
             let ruleset = Into::<RulesetTemplate>::into(ruleset).generate();
-            let simulation = Simulation::new(2000, ruleset, (walls, wall_dist).try_into().unwrap());
+            let simulation =
+                Simulation::new(points, ruleset, (walls, wall_dist).try_into().unwrap());
 
             let visualization = Visualization::with_random_colors(simulation);
             let res = ContextBuilder::new("plife", "Taylor")
