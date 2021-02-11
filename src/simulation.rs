@@ -4,6 +4,7 @@ use arrayfire::*;
 use num_complex::Complex;
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
+use serde::{Deserialize, Serialize};
 
 pub type Float = f32;
 pub type Radius = Float;
@@ -85,6 +86,7 @@ pub const DIVERSITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
     min_friction: 0.05,
 };
 
+#[derive(Serialize, Deserialize)]
 pub enum Walls {
     None,
     Square(Float),
@@ -98,9 +100,9 @@ pub struct Simulation {
     pub num_points: u64,
     pub ruleset: Ruleset,
     pub walls: Walls,
-    cache_max_r: Array<Radius>,
-    cache_min_r: Array<Radius>,
-    cache_attraction: Array<Attraction>,
+    pub cache_max_r: Array<Radius>, // TODO: make these private again
+    pub cache_min_r: Array<Radius>,
+    pub cache_attraction: Array<Attraction>,
 }
 
 impl Simulation {
