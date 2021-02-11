@@ -21,7 +21,7 @@ enum CLIAction {
         #[structopt(long)]
         walls: WallsCLI,
         #[structopt(long, default_value = "1000")]
-        points: usize,
+        points: u64,
         #[structopt(long, required_ifs(&[("walls", "square"), ("walls", "wrapping")]))]
         wall_dist: Option<Float>,
     },

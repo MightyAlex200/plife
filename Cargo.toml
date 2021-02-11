@@ -14,3 +14,5 @@ paw = "1.0"
 ggez = { git = "https://github.com/ggez/ggez", branch = "devel" }
 glam = "0.12"
 rayon = "1.5"
+arrayfire = "3.8"
+num-complex = "0.2.4"

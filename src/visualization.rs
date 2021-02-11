@@ -1,12 +1,13 @@
 use std::time::{Duration, Instant};
 
-use crate::simulation::Simulation;
+use crate::simulation::{PointType, Simulation};
 use ggez::{
     event::{EventHandler, KeyCode, MouseButton},
     graphics::{self, Color, DrawMode, DrawParam, MeshBuilder, Text, Transform},
     input, Context, GameResult,
 };
 use glam::Vec2;
+use num_complex::Complex;
 
 pub struct Visualization {
     pub simulation: Simulation,
@@ -21,7 +22,7 @@ pub struct Visualization {
 
 impl Visualization {
     pub fn with_random_colors(simulation: Simulation) -> Self {
-        let mut colors = Vec::with_capacity(simulation.ruleset.num_point_types);
+        let mut colors = Vec::with_capacity(simulation.ruleset.num_point_types as usize);
 
         fn random_color() -> Color {
             Color::new(rand::random(), rand::random(), rand::random(), 1.0)
@@ -95,13 +96,19 @@ impl EventHandler for Visualization {
 
         let mut mesh_builder = MeshBuilder::new();
 
-        for point in &self.simulation.points {
+        let mut points = vec![Complex::new(0.0f32, 0.0f32); self.simulation.num_points as usize];
+        self.simulation.positions.host(&mut points);
+
+        let mut point_types = vec![PointType::default(); self.simulation.num_points as usize];
+        self.simulation.types.host(&mut point_types);
+
+        for (point, point_type) in points.into_iter().zip(point_types) {
             mesh_builder.circle(
                 DrawMode::fill(),
-                [point.position.x, point.position.y],
+                [point.re, point.im],
                 3.0,
                 0.1,
-                self.colors[point.point_type].clone(),
+                self.colors[point_type as usize].clone(),
             )?;
         }
 
