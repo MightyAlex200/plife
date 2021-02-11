@@ -200,6 +200,7 @@ fn main(args: CLIAction) {
             let simulation =
                 Simulation::new(points, ruleset, (walls, wall_dist).try_into().unwrap());
 
+            println!("Using backend {}", arrayfire::get_active_backend());
             if headless {
                 run_headless(simulation, checkpoint, steps)
             } else {
