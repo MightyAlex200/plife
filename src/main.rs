@@ -66,6 +66,7 @@ struct RunSimulation {
 
 arg_enum! {
     enum RulesetTemplateCLI {
+        Cool,
         Diversity,
         Balanced,
         Chaos,
@@ -77,6 +78,7 @@ arg_enum! {
 impl Into<RulesetTemplate> for RulesetTemplateCLI {
     fn into(self) -> RulesetTemplate {
         match self {
+            RulesetTemplateCLI::Cool => COOL_TEMPLATE,
             RulesetTemplateCLI::Diversity => DIVERSITY_TEMPLATE,
             RulesetTemplateCLI::Balanced => BALANCED_TEMPLATE,
             RulesetTemplateCLI::Chaos => CHAOS_TEMPLATE,

@@ -73,6 +73,18 @@ impl RulesetTemplate {
     }
 }
 
+pub const COOL_TEMPLATE: RulesetTemplate = RulesetTemplate {
+    min_types: 12,
+    max_types: 12,
+    attractions_mean: -0.01,
+    attractions_std: 0.04,
+    min_r_lower: 0.0,
+    min_r_upper: 20.0,
+    max_r_upper: 500.0,
+    max_r_lower: 10.0,
+    max_friction: 0.05,
+    min_friction: 0.05,
+};
 pub const DIVERSITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
     min_types: 12,
     max_types: 12,
