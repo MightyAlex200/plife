@@ -53,6 +53,10 @@ enum CLIAction {
 arg_enum! {
     enum RulesetTemplateCLI {
         Diversity,
+        Balanced,
+        Chaos,
+        Homogeneity,
+        Quiescence,
     }
 }
 
@@ -60,6 +64,10 @@ impl Into<RulesetTemplate> for RulesetTemplateCLI {
     fn into(self) -> RulesetTemplate {
         match self {
             RulesetTemplateCLI::Diversity => DIVERSITY_TEMPLATE,
+            RulesetTemplateCLI::Balanced => BALANCED_TEMPLATE,
+            RulesetTemplateCLI::Chaos => CHAOS_TEMPLATE,
+            RulesetTemplateCLI::Homogeneity => HOMOGENEITY_TEMPLATE,
+            RulesetTemplateCLI::Quiescence => QUIESCENCE_TEMPLATE,
         }
     }
 }

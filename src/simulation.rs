@@ -85,6 +85,54 @@ pub const DIVERSITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
     max_friction: 0.05,
     min_friction: 0.05,
 };
+pub const BALANCED_TEMPLATE: RulesetTemplate = RulesetTemplate {
+    min_types: 9,
+    max_types: 9,
+    attractions_mean: -0.02,
+    attractions_std: 0.06,
+    min_r_lower: 0.0,
+    min_r_upper: 20.0,
+    max_r_lower: 20.0,
+    max_r_upper: 70.0,
+    min_friction: 0.05,
+    max_friction: 0.05,
+};
+pub const CHAOS_TEMPLATE: RulesetTemplate = RulesetTemplate {
+    min_types: 6,
+    max_types: 6,
+    attractions_mean: 0.02,
+    attractions_std: 0.04,
+    min_r_lower: 0.0,
+    min_r_upper: 30.0,
+    max_r_lower: 30.0,
+    max_r_upper: 100.0,
+    min_friction: 0.01,
+    max_friction: 0.01,
+};
+pub const HOMOGENEITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
+    min_types: 4,
+    max_types: 4,
+    attractions_mean: 0.0,
+    attractions_std: 0.04,
+    min_r_lower: 10.0,
+    min_r_upper: 10.0,
+    max_r_lower: 10.0,
+    max_r_upper: 80.0,
+    min_friction: 0.05,
+    max_friction: 0.05,
+};
+pub const QUIESCENCE_TEMPLATE: RulesetTemplate = RulesetTemplate {
+    min_types: 6,
+    max_types: 6,
+    attractions_mean: -0.02,
+    attractions_std: 0.1,
+    min_r_lower: 10.0,
+    min_r_upper: 20.0,
+    max_r_lower: 20.0,
+    max_r_upper: 60.0,
+    min_friction: 0.2,
+    max_friction: 0.2,
+};
 
 #[derive(Serialize, Deserialize)]
 pub enum Walls {
