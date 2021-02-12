@@ -23,31 +23,45 @@ use structopt::{clap::arg_enum, StructOpt};
 use visualization::*;
 
 #[derive(StructOpt)]
-/// Particle life simulator
-enum CLIAction {
-    /// Run and display a simulation
-    Run {
-        #[structopt(
-            long,
-            required_unless("ruleset-template"),
-            conflicts_with("ruleset-template")
-        )]
-        ruleset: Option<PathBuf>,
-        #[structopt(long, required_unless("ruleset"))]
-        ruleset_template: Option<RulesetTemplateCLI>,
+enum RulesetSource {
+    Template { template: RulesetTemplateCLI },
+    LoadRuleset { ruleset_path: PathBuf },
+}
+
+#[derive(StructOpt)]
+enum SimulationSource {
+    New {
+        #[structopt(subcommand)]
+        ruleset: RulesetSource,
         #[structopt(long)]
-        walls: WallsCLI,
-        #[structopt(long, default_value = "1000")]
         points: u64,
-        #[structopt(long, required_ifs(&[("walls", "square"), ("walls", "wrapping")]))]
-        wall_dist: Option<Float>,
         #[structopt(long)]
-        headless: bool,
-        #[structopt(long, required_if("headless", "true"))]
-        checkpoint: Option<u64>,
+        wall_type: WallsCLI,
         #[structopt(long)]
-        steps: Option<u64>,
+        wall_dist: Option<f32>, // TODO is there a better way to do this?
     },
+    Load {
+        simulation_path: PathBuf,
+    },
+}
+
+#[derive(StructOpt)]
+struct HeadlessOptions {
+    #[structopt(long)]
+    checkpoint: Option<u64>,
+    #[structopt(long)]
+    steps: Option<u64>,
+}
+
+#[derive(StructOpt)]
+/// Particle life simulator
+struct RunSimulation {
+    #[structopt(flatten)]
+    simulation: SimulationSource,
+    #[structopt(long)]
+    headless: bool,
+    #[structopt(flatten)]
+    headless_options: HeadlessOptions,
 }
 
 arg_enum! {
@@ -184,36 +198,48 @@ fn run_headless(mut simulation: Simulation, checkpoint: Option<u64>, max_steps: 
 }
 
 #[paw::main]
-fn main(args: CLIAction) {
-    match args {
-        CLIAction::Run {
+fn main(args: RunSimulation) {
+    let RunSimulation {
+        simulation: simulation_source,
+        headless,
+        headless_options,
+    } = args;
+    let simulation = match simulation_source {
+        SimulationSource::New {
             ruleset,
-            walls,
-            wall_dist,
             points,
-            ruleset_template,
-            headless,
-            checkpoint,
-            steps,
+            wall_type,
+            wall_dist,
         } => {
-            let ruleset = match (ruleset, ruleset_template) {
-                (Some(path), _) => {
-                    deserialize_from::<_, RulesetSerialized>(std::fs::File::create(path).unwrap())
-                        .unwrap()
-                        .into()
+            let ruleset = match ruleset {
+                RulesetSource::Template { template } => {
+                    Into::<RulesetTemplate>::into(template).generate()
                 }
-                (None, Some(template)) => Into::<RulesetTemplate>::into(template).generate(),
-                (None, None) => unreachable!(),
+                RulesetSource::LoadRuleset { ruleset_path } => {
+                    deserialize_from::<_, RulesetSerialized>(
+                        std::fs::File::create(ruleset_path).unwrap(),
+                    )
+                    .unwrap()
+                    .into()
+                }
             };
-            let simulation =
-                Simulation::new(points, ruleset, (walls, wall_dist).try_into().unwrap());
-
-            println!("Using backend {}", arrayfire::get_active_backend());
-            if headless {
-                run_headless(simulation, checkpoint, steps)
-            } else {
-                run_headed(simulation)
-            }
+            Simulation::new(points, ruleset, (wall_type, wall_dist).try_into().unwrap())
         }
+        SimulationSource::Load { simulation_path } => deserialize_from::<_, SimulationSerialized>(
+            std::fs::File::create(simulation_path).unwrap(),
+        )
+        .unwrap()
+        .into(),
+    };
+
+    println!("Using backend {}", arrayfire::get_active_backend());
+    if headless {
+        run_headless(
+            simulation,
+            headless_options.checkpoint,
+            headless_options.steps,
+        )
+    } else {
+        run_headed(simulation)
     }
 }
