@@ -1,6 +1,6 @@
-mod serialize;
+// mod serialize;
 mod simulation;
-mod visualization;
+// mod visualization;
 
 use std::{
     convert::TryInto,
@@ -12,15 +12,12 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use bincode::deserialize_from;
-use ggez::{
-    conf::{ModuleConf, NumSamples, WindowMode, WindowSetup},
-    event, ContextBuilder,
-};
-use serialize::{RulesetSerialized, SimulationSerialized};
+// use bincode::deserialize_from; TODO serialization
+// use serialize::{RulesetSerialized, SimulationSerialized}; TODO serialization
 use simulation::*;
 use structopt::{clap::arg_enum, StructOpt};
-use visualization::*;
+use wgpu::*;
+// use visualization::*;
 
 #[derive(StructOpt)]
 enum RulesetSource {
@@ -34,7 +31,7 @@ enum SimulationSource {
         #[structopt(subcommand)]
         ruleset: RulesetSource,
         #[structopt(long)]
-        points: u64,
+        points: u32,
         #[structopt(long)]
         wall_type: WallsCLI,
         #[structopt(long)]
@@ -96,7 +93,7 @@ arg_enum! {
     }
 }
 
-impl TryInto<Walls> for (WallsCLI, Option<Float>) {
+impl TryInto<Walls> for (WallsCLI, Option<f32>) {
     type Error = &'static str;
     fn try_into(self) -> Result<Walls, Self::Error> {
         match self {
@@ -109,37 +106,44 @@ impl TryInto<Walls> for (WallsCLI, Option<Float>) {
 }
 
 fn run_headed(simulation: Simulation) {
-    let visualization = Visualization::with_random_colors(simulation);
-    let res = ContextBuilder::new("plife", "Taylor")
-        .window_setup(WindowSetup {
-            title: "plife visualization".to_owned(),
-            samples: NumSamples::Four,
-            vsync: true,
-            icon: "".to_owned(),
-            srgb: false,
-        })
-        .window_mode(WindowMode {
-            width: 1200.0,
-            height: 800.0,
-            ..Default::default()
-        })
-        .modules(ModuleConf {
-            gamepad: false,
-            audio: false,
-        })
-        .build();
-    let (ctx, event_loop) = match res {
-        Ok(tuple) => tuple,
-        Err(e) => {
-            eprintln!("Error initializing visualization: {}", e);
-            std::process::exit(1);
-        }
-    };
+    unimplemented!()
+    // let visualization = Visualization::with_random_colors(simulation);
+    // let res = ContextBuilder::new("plife", "Taylor")
+    //     .window_setup(WindowSetup {
+    //         title: "plife visualization".to_owned(),
+    //         samples: NumSamples::Four,
+    //         vsync: true,
+    //         icon: "".to_owned(),
+    //         srgb: false,
+    //     })
+    //     .window_mode(WindowMode {
+    //         width: 1200.0,
+    //         height: 800.0,
+    //         ..Default::default()
+    //     })
+    //     .modules(ModuleConf {
+    //         gamepad: false,
+    //         audio: false,
+    //     })
+    //     .build();
+    // let (ctx, event_loop) = match res {
+    //     Ok(tuple) => tuple,
+    //     Err(e) => {
+    //         eprintln!("Error initializing visualization: {}", e);
+    //         std::process::exit(1);
+    //     }
+    // };
 
-    event::run(ctx, event_loop, visualization)
+    // event::run(ctx, event_loop, visualization)
 }
 
-fn run_headless(mut simulation: Simulation, checkpoint: Option<u64>, max_steps: Option<u64>) {
+fn run_headless(
+    device: &Device,
+    queue: &Queue,
+    mut simulation: Simulation,
+    checkpoint: Option<u64>,
+    max_steps: Option<u64>,
+) {
     let broken = Arc::new(AtomicBool::new(false));
     let b = broken.clone();
     ctrlc::set_handler(move || {
@@ -153,7 +157,7 @@ fn run_headless(mut simulation: Simulation, checkpoint: Option<u64>, max_steps: 
     let mut last_checkpoint = start;
 
     loop {
-        simulation.step();
+        simulation.step(&device, &queue);
         steps += 1;
         steps_since_checkpoint += 1;
         if let Some(checkpoint) = checkpoint {
@@ -191,21 +195,63 @@ fn run_headless(mut simulation: Simulation, checkpoint: Option<u64>, max_steps: 
             .as_secs()
     )
     .into();
-    bincode::serialize_into(
-        std::fs::File::create(file_name).unwrap(),
-        &Into::<SimulationSerialized>::into(simulation),
-    )
-    .unwrap();
+    // bincode::serialize_into(
+    //     std::fs::File::create(file_name).unwrap(),
+    //     &Into::<SimulationSerialized>::into(simulation),
+    // )
+    // .unwrap(); TODO serialization
     println!("Saved in {:#?}", Instant::now() - save_start);
 }
 
 #[paw::main]
-fn main(args: RunSimulation) {
+#[tokio::main]
+async fn main(args: RunSimulation) {
     let RunSimulation {
         simulation: simulation_source,
         headless,
         headless_options,
     } = args;
+    let instance = Instance::new(BackendBit::all());
+    let adapter = instance
+        .request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            compatible_surface: None, // TODO visualization
+        })
+        .await
+        .expect("Unable to find a suitable graphics adapter");
+    let info = adapter.get_info();
+    println!(
+        "Using {} {} ({})",
+        match info.device_type {
+            DeviceType::Other => "unclassified accelerator",
+            DeviceType::IntegratedGpu => "integrated GPU",
+            DeviceType::DiscreteGpu => "discrete GPU",
+            DeviceType::VirtualGpu => "virtualized GPU",
+            DeviceType::Cpu => "CPU",
+        },
+        info.name,
+        match info.backend {
+            Backend::Empty => "dummy backend",
+            Backend::Vulkan => "Vulkan",
+            Backend::Metal => "Metal",
+            Backend::Dx12 => "DirectX 12",
+            Backend::Dx11 => "DirectX 11",
+            Backend::Gl => "OpenGL",
+            Backend::BrowserWebGpu => "WebGPU",
+        }
+    );
+    let (device, queue) = adapter
+        .request_device(
+            &DeviceDescriptor {
+                label: Some("main device"),
+                features: Features::default(),
+                limits: Limits::default(),
+            },
+            None,
+        )
+        .await
+        .expect("Failed to get device handle");
+
     let simulation = match simulation_source {
         SimulationSource::New {
             ruleset,
@@ -218,25 +264,36 @@ fn main(args: RunSimulation) {
                     Into::<RulesetTemplate>::into(template).generate()
                 }
                 RulesetSource::LoadRuleset { ruleset_path } => {
-                    deserialize_from::<_, RulesetSerialized>(
-                        std::fs::File::create(ruleset_path).unwrap(),
-                    )
-                    .unwrap()
-                    .into()
+                    // deserialize_from::<_, RulesetSerialized>(
+                    //     std::fs::File::create(ruleset_path).unwrap(),
+                    // )
+                    // .unwrap()
+                    // .into() TODO serialization
+                    unimplemented!()
                 }
             };
-            Simulation::new(points, ruleset, (wall_type, wall_dist).try_into().unwrap())
+            Simulation::new(
+                &device,
+                points,
+                ruleset,
+                (wall_type, wall_dist).try_into().unwrap(),
+            )
         }
-        SimulationSource::Load { simulation_path } => deserialize_from::<_, SimulationSerialized>(
-            std::fs::File::create(simulation_path).unwrap(),
-        )
-        .unwrap()
-        .into(),
+        SimulationSource::Load { simulation_path } =>
+        // deserialize_from::<_, SimulationSerialized>(
+        //     std::fs::File::create(simulation_path).unwrap(),
+        // )
+        // .unwrap()
+        // .into(), TODO serialization
+        {
+            unimplemented!()
+        }
     };
 
-    println!("Using backend {}", arrayfire::get_active_backend());
     if headless {
         run_headless(
+            &device,
+            &queue,
             simulation,
             headless_options.checkpoint,
             headless_options.steps,

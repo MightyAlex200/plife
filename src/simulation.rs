@@ -1,22 +1,25 @@
-use std::unimplemented;
+use std::{
+    io::{Cursor, Write},
+    num::NonZeroU64,
+};
 
-use arrayfire::*;
-use num_complex::Complex;
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
-use serde::{Deserialize, Serialize};
+// use serde::{Deserialize, Serialize}; TODO serialization
+use wgpu::*;
 
-pub type Float = f32;
-pub type Radius = Float;
-pub type Attraction = Float;
-pub type Friction = Float;
-pub type PointType = u64;
+pub type Radius = f32;
+pub type Attraction = f32;
+pub type Friction = f32;
+pub type PointType = u32;
+
+const WORKGROUP_SIZE: u32 = 256;
 
 pub struct Ruleset {
     pub num_point_types: PointType,
-    pub min_r: Array<Radius>,
-    pub max_r: Array<Radius>,
-    pub attractions: Array<Attraction>,
+    pub min_r: Vec<Vec<Radius>>,
+    pub max_r: Vec<Vec<Radius>>,
+    pub attractions: Vec<Vec<Attraction>>,
     pub friction: Friction,
 }
 
@@ -41,22 +44,34 @@ impl RulesetTemplate {
 
         // un-idiomatic but I'm not smart :(
 
-        fn gen_2d_vec_uniform(n: PointType, min: Radius, max: Radius) -> Array<Radius> {
-            let mut vec = Vec::with_capacity((n * n) as usize);
-            for _ in 0..(n * n) {
-                vec.push(thread_rng().gen_range(min..=max));
+        fn gen_2d_vec_uniform(n: PointType, min: Radius, max: Radius) -> Vec<Vec<Radius>> {
+            let mut vec1 = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let mut vec2 = Vec::with_capacity(n as usize);
+                for _ in 0..n {
+                    vec2.push(thread_rng().gen_range(min..=max));
+                }
+                vec1.push(vec2)
             }
-            Array::new(&vec, Dim4::new(&[n, n, 1, 1]))
+            vec1
         }
 
-        fn gen_2d_vec_normal(n: PointType, mean: Attraction, std_dev: Attraction) -> Array<Radius> {
+        fn gen_2d_vec_normal(
+            n: PointType,
+            mean: Attraction,
+            std_dev: Attraction,
+        ) -> Vec<Vec<Radius>> {
             let dist = Normal::new(mean, std_dev).unwrap();
             let mut rng = thread_rng();
-            let mut vec = Vec::with_capacity((n * n) as usize);
-            for _ in 0..(n * n) {
-                vec.push(dist.sample(&mut rng));
+            let mut vec1 = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                let mut vec2 = Vec::with_capacity(n as usize);
+                for _ in 0..n {
+                    vec2.push(dist.sample(&mut rng));
+                }
+                vec1.push(vec2);
             }
-            Array::new(&vec, Dim4::new(&[n, n, 1, 1]))
+            vec1
         }
 
         Ruleset {
@@ -146,154 +161,493 @@ pub const QUIESCENCE_TEMPLATE: RulesetTemplate = RulesetTemplate {
     max_friction: 0.2,
 };
 
-#[derive(Serialize, Deserialize)]
+// #[derive(Serialize, Deserialize)] TODO serialization
 pub enum Walls {
     None,
-    Square(Float),
-    Wrapping(Float),
+    Square(f32),
+    Wrapping(f32),
 }
 
 pub struct Simulation {
-    pub positions: Array<Complex<f32>>,
-    pub velocities: Array<Complex<f32>>,
-    pub types: Array<PointType>,
-    pub num_points: u64,
+    pub num_points: u32,
     pub ruleset: Ruleset,
     pub walls: Walls,
-    pub cache_max_r: Array<Radius>, // TODO: make these private again
-    pub cache_min_r: Array<Radius>,
-    pub cache_attraction: Array<Attraction>,
+    positions: Buffer,
+    positions_old: Buffer,
+    velocities: Buffer,
+    types: Buffer,
+    cache_max_r: Buffer,
+    cache_min_r: Buffer,
+    cache_attraction: Buffer,
+    step_buffer: Option<CommandBuffer>,
+    bind_group_layout: BindGroupLayout,
+    bind_group: BindGroup,
+    pipeline: ComputePipeline,
+    velocities_old: Buffer,
 }
 
 impl Simulation {
-    pub const R_SMOOTH: Float = 2.0;
+    pub const R_SMOOTH: f32 = 2.0;
 
     // utility
-    fn generate_point_normal() -> Complex<f32> {
+    fn generate_point_normal() -> (f32, f32) {
         let mut rng = thread_rng();
         let normal = Normal::new(0.0, 5.0).unwrap();
-        Complex::new(rng.sample(normal), rng.sample(normal))
+        (rng.sample(normal), rng.sample(normal))
     }
 
-    fn generate_point_uniform(dist: Float) -> Complex<f32> {
+    fn generate_point_uniform(dist: f32) -> (f32, f32) {
         let mut rng = thread_rng();
-        Complex::new(rng.gen_range(-dist..dist), rng.gen_range(-dist..dist))
+        (rng.gen_range(-dist..dist), rng.gen_range(-dist..dist))
     }
 
-    pub fn new(num_points: u64, ruleset: Ruleset, walls: Walls) -> Self {
-        let dims = Dim4::new(&[num_points, 1, 1, 1]);
-        let mut points = Vec::with_capacity(num_points as usize);
+    pub fn new(device: &Device, num_points: u32, ruleset: Ruleset, walls: Walls) -> Self {
+        // Buffers
+        fn create_buffer(
+            device: &Device,
+            label: Option<&'static str>,
+            size: u64,
+            usage: BufferUsage,
+            map_function: impl FnOnce(&mut Buffer),
+        ) -> Buffer {
+            let mut buf = device.create_buffer(&BufferDescriptor {
+                label,
+                size,
+                usage,
+                mapped_at_creation: true,
+            });
+            map_function(&mut buf);
+            buf.unmap();
+            buf
+        }
 
-        (0..num_points).for_each(|_| {
-            let point = match walls {
-                Walls::None => Simulation::generate_point_normal(),
-                Walls::Square(dist) | Walls::Wrapping(dist) => {
-                    Simulation::generate_point_uniform(dist)
+        let positions = create_buffer(
+            &device,
+            Some("positions"),
+            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+            BufferUsage::STORAGE | BufferUsage::COPY_SRC,
+            |positions: &mut Buffer| {
+                let slice = positions.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for _ in 0..num_points {
+                    let point = Simulation::generate_point_uniform(500.0); // TODO Walls
+                    cursor.write_all(&point.0.to_le_bytes()).unwrap();
+                    cursor.write_all(&point.1.to_le_bytes()).unwrap();
                 }
-            };
-            points.push(point);
+            },
+        );
+
+        let positions_old = create_buffer(
+            &device,
+            Some("positions_old"),
+            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+            BufferUsage::STORAGE | BufferUsage::COPY_DST,
+            |_| {},
+        );
+
+        let velocities = create_buffer(
+            &device,
+            Some("velocities"),
+            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+            BufferUsage::STORAGE,
+            |velocities| {
+                let slice = velocities.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for _ in 0..num_points {
+                    cursor.write_all(&0.0f32.to_le_bytes()).unwrap();
+                    cursor.write_all(&0.0f32.to_le_bytes()).unwrap();
+                }
+            },
+        );
+
+        let velocities_old = create_buffer(
+            &device,
+            Some("velocities_old"),
+            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+            BufferUsage::STORAGE,
+            |_| {},
+        );
+
+        let mut types_vec = Vec::with_capacity(num_points as usize);
+        for _ in 0..num_points {
+            types_vec.push(thread_rng().gen_range(0..ruleset.num_point_types));
+        }
+        let types_vec = types_vec;
+        let types = create_buffer(
+            &device,
+            Some("types"),
+            num_points as u64 * std::mem::size_of::<PointType>() as u64,
+            BufferUsage::UNIFORM,
+            |types: &mut Buffer| {
+                let slice = types.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for i in 0..num_points {
+                    let type_ = types_vec[i as usize];
+                    cursor.write_all(&type_.to_le_bytes()).unwrap();
+                }
+            },
+        );
+
+        let cache_max_r = create_buffer(
+            &device,
+            Some("cache_max_r"),
+            (ruleset.num_point_types
+                * ruleset.num_point_types
+                * std::mem::size_of::<Radius>() as u32) as u64,
+            BufferUsage::UNIFORM,
+            |cache_max_r: &mut Buffer| {
+                let slice = cache_max_r.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for y in 0..ruleset.num_point_types {
+                    for x in 0..ruleset.num_point_types {
+                        let max_r = ruleset.min_r[types_vec[y as usize] as usize]
+                            [types_vec[x as usize] as usize];
+                        cursor.write_all(&max_r.to_le_bytes()).unwrap();
+                    }
+                }
+            },
+        );
+
+        let cache_min_r = create_buffer(
+            &device,
+            Some("cache_min_r"),
+            (ruleset.num_point_types
+                * ruleset.num_point_types
+                * std::mem::size_of::<Radius>() as u32) as u64,
+            BufferUsage::UNIFORM,
+            |cache_min_r: &mut Buffer| {
+                let slice = cache_min_r.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for y in 0..ruleset.num_point_types {
+                    for x in 0..ruleset.num_point_types {
+                        let min_r = ruleset.min_r[types_vec[y as usize] as usize]
+                            [types_vec[x as usize] as usize];
+                        cursor.write_all(&min_r.to_le_bytes()).unwrap();
+                    }
+                }
+            },
+        );
+
+        let cache_attraction = create_buffer(
+            &device,
+            Some("attraction"),
+            (ruleset.num_point_types
+                * ruleset.num_point_types
+                * std::mem::size_of::<Attraction>() as u32) as u64,
+            BufferUsage::UNIFORM,
+            |cache_attraction: &mut Buffer| {
+                let slice = cache_attraction.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                for y in 0..ruleset.num_point_types {
+                    for x in 0..ruleset.num_point_types {
+                        let attraction = ruleset.attractions[types_vec[y as usize] as usize]
+                            [types_vec[x as usize] as usize];
+                        cursor.write_all(&attraction.to_le_bytes()).unwrap();
+                    }
+                }
+            },
+        );
+
+        let globals = create_buffer(
+            &device,
+            Some("globals"),
+            (std::mem::size_of_val(&num_points)
+                + std::mem::size_of_val(&ruleset.num_point_types)
+                + std::mem::size_of_val(&ruleset.friction)) as u64,
+            BufferUsage::UNIFORM,
+            |globals| {
+                let slice = globals.slice(..);
+                let mut view = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *view);
+                cursor.write_all(&num_points.to_le_bytes()).unwrap();
+                cursor
+                    .write_all(&ruleset.num_point_types.to_le_bytes())
+                    .unwrap();
+                cursor.write_all(&ruleset.friction.to_le_bytes()).unwrap();
+            },
+        );
+
+        // Bind groups
+        // 0: positions
+        // 1: positions_old
+        // 2: velocities
+        // 3: velocities_old
+        // 4: types
+        // 5: cache_max_r
+        // 6: cache_min_r
+        // 7: cache_attraction
+        // 8: globals
+        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
+            label: Some("step_bindgroup_layout"),
+            entries: &[
+                BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (num_points * std::mem::size_of::<PointType>() as u32) as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (ruleset.num_point_types
+                                * ruleset.num_point_types
+                                * std::mem::size_of::<Radius>() as u32)
+                                as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 6,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (ruleset.num_point_types
+                                * ruleset.num_point_types
+                                * std::mem::size_of::<Radius>() as u32)
+                                as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 7,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (ruleset.num_point_types
+                                * ruleset.num_point_types
+                                * std::mem::size_of::<Attraction>() as u32)
+                                as u64,
+                        ),
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: ShaderStage::COMPUTE,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: NonZeroU64::new(
+                            (std::mem::size_of_val(&num_points)
+                                + std::mem::size_of_val(&ruleset.num_point_types)
+                                + std::mem::size_of_val(&ruleset.friction))
+                                as u64,
+                        ),
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let bind_group = device.create_bind_group(&BindGroupDescriptor {
+            label: Some("step_bindgroup"),
+            layout: &bind_group_layout,
+            entries: &[
+                BindGroupEntry {
+                    binding: 0,
+                    resource: BindingResource::Buffer {
+                        buffer: &positions,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 1,
+                    resource: BindingResource::Buffer {
+                        buffer: &positions_old,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Buffer {
+                        buffer: &velocities,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Buffer {
+                        buffer: &velocities_old,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 4,
+                    resource: BindingResource::Buffer {
+                        buffer: &types,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 5,
+                    resource: BindingResource::Buffer {
+                        buffer: &cache_max_r,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 6,
+                    resource: BindingResource::Buffer {
+                        buffer: &cache_min_r,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 7,
+                    resource: BindingResource::Buffer {
+                        buffer: &cache_attraction,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+                BindGroupEntry {
+                    binding: 8,
+                    resource: BindingResource::Buffer {
+                        buffer: &globals,
+                        offset: 0,
+                        size: None,
+                    },
+                },
+            ],
+        });
+        // Pipeline
+        let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
+            label: Some("compute_pipeline"),
+            layout: Some(&device.create_pipeline_layout(&PipelineLayoutDescriptor {
+                label: Some("compute_pipeline_layout"),
+                bind_group_layouts: &[&bind_group_layout],
+                push_constant_ranges: &[],
+            })),
+            module: &device.create_shader_module(&ShaderModuleDescriptor {
+                label: Some("compute_shader"),
+                source: ShaderSource::Wgsl(include_str!("compute.wgsl").into()),
+                flags: ShaderFlags::VALIDATION,
+            }),
+            entry_point: "main",
         });
 
-        let types = randu::<PointType>(dims) % constant(ruleset.num_point_types, dims);
-
-        let idxr = || {
-            let mut idx = Indexer::default();
-            idx.set_index(&types, 0, None);
-            idx.set_index(&types, 1, None);
-            idx
-        };
-
         Self {
-            positions: Array::new(&points, dims),
-            velocities: constant(Complex::new(0.0, 0.0), dims),
+            positions,
+            positions_old,
+            velocities,
+            velocities_old,
             num_points,
             walls,
-            cache_max_r: index_gen(&ruleset.max_r, idxr()),
-            cache_min_r: index_gen(&ruleset.min_r, idxr()),
-            cache_attraction: index_gen(&ruleset.attractions, idxr()),
+            cache_max_r,
+            cache_min_r,
+            cache_attraction,
             types,
             ruleset,
+            bind_group_layout,
+            bind_group,
+            pipeline,
+            step_buffer: None,
         }
     }
-
-    fn get_velocities(&self) -> Array<Complex<f32>> {
-        let squared_dim = Dim4::new(&[self.num_points, self.num_points, 1, 1]);
-        let p = tile(&self.positions, Dim4::new(&[1, self.num_points, 1, 1]));
-        let q = tile(
-            &transpose(&self.positions, false),
-            Dim4::new(&[self.num_points, 1, 1, 1]),
+    pub fn step(&mut self, device: &Device, queue: &Queue) {
+        let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("step"),
+        });
+        encoder.copy_buffer_to_buffer(
+            &self.positions,
+            0,
+            &self.positions_old,
+            0,
+            self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
         );
-        let mut delta = q - p;
-        if let Walls::Wrapping(wall_dist) = self.walls {
-            let x_too_high = gt(&real(&delta), &wall_dist, false);
-            let x_too_low = lt(&real(&delta), &-wall_dist, false);
-            let y_too_high = gt(&imag(&delta), &wall_dist, false);
-            let y_too_low = lt(&imag(&delta), &-wall_dist, false);
-
-            delta -= x_too_high * wall_dist * Complex::new(2.0, 0.0);
-            delta += x_too_low * wall_dist * Complex::new(2.0, 0.0);
-            delta -= y_too_high * wall_dist * Complex::new(0.0, 2.0);
-            delta += y_too_low * wall_dist * Complex::new(0.0, 2.0);
-        }
-        let dist = abs(&delta);
-        let skip = or(
-            &gt(&dist, &self.cache_max_r, false),
-            &le(&dist, &constant(0.01f32, squared_dim), false),
-            false,
+        encoder.copy_buffer_to_buffer(
+            &self.velocities,
+            0,
+            &self.velocities_old,
+            0,
+            self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
         );
-        let outside_minimum = gt(&dist, &self.cache_min_r, false);
-        let numer = 2.0f32 * abs(&(&dist - 0.5f32 * (&self.cache_max_r + &self.cache_min_r)));
-        let denom = &self.cache_max_r - &self.cache_min_r;
-        let if_outside = &self.cache_attraction * (1.0f32 - numer / denom);
-        let if_inside = Self::R_SMOOTH
-            * &self.cache_min_r
-            * (1.0f32 / (&self.cache_min_r + Self::R_SMOOTH) - 1.0f32 / (&dist + Self::R_SMOOTH));
-        let force = &outside_minimum * if_outside + !&outside_minimum * if_inside;
-        sum_nan(&(delta / dist * force * !&skip), 1, 0.0)
-    }
-
-    fn step_velocities(&mut self) {
-        self.velocities += self.get_velocities();
-    }
-
-    pub fn step(&mut self) {
-        self.step_velocities();
-
-        self.positions = &self.positions + &self.velocities;
-        self.velocities *= constant(
-            1.0 - self.ruleset.friction,
-            Dim4::new(&[self.num_points, 1, 1, 1]),
-        );
-
-        // Check for wall collisions
-        let wall_dist = match self.walls {
-            Walls::Wrapping(wall_dist) | Walls::Square(wall_dist) => wall_dist,
-            Walls::None => return,
-        };
-
-        let x_too_low = lt(&real(&self.positions), &-wall_dist, false);
-        let x_too_high = ge(&real(&self.positions), &wall_dist, false);
-        let y_too_low = lt(&imag(&self.positions), &-wall_dist, false);
-        let y_too_high = ge(&imag(&self.positions), &wall_dist, false);
-
-        match self.walls {
-            Walls::Wrapping(wall_dist) => {
-                self.positions += &x_too_low * wall_dist * Complex::new(2.0, 0.0);
-                self.positions -= &x_too_high * wall_dist * Complex::new(2.0, 0.0);
-                self.positions += &y_too_low * wall_dist * Complex::new(0.0, 2.0);
-                self.positions -= &y_too_high * wall_dist * Complex::new(0.0, 2.0);
-            }
-            Walls::Square(_) => {
-                unimplemented!(); // TODO
-
-                // ?????
-                // let clamped_x_low =
-                //     &self.positions * Complex::new(0.0f32, 1.0) + Complex::new(-wall_dist, 0.0);
-                // self.positions = &x_too_low * &clamped_x_low + &!&x_too_low * &self.positions;
-                // self.velocities *= Complex::new(-1.0, 1.0) * or(&x_too_low, &x_too_high, false);
-                // self.velocities *= Complex::new(1.0, -1.0) * or(&y_too_low, &y_too_high, false);
-            }
-            Walls::None => {}
-        }
+        let mut compute_pass = encoder.begin_compute_pass(&ComputePassDescriptor {
+            label: Some("step_pass"),
+        });
+        compute_pass.set_bind_group(0, &self.bind_group, &[]);
+        compute_pass.set_pipeline(&self.pipeline);
+        // Dispatch
+        let workgroups = (self.num_points as f32 / WORKGROUP_SIZE as f32).ceil() as u32;
+        compute_pass.dispatch(workgroups, 1, 1);
+        drop(compute_pass);
+        let cmd = encoder.finish();
+        queue.submit(Some(cmd));
     }
 }
