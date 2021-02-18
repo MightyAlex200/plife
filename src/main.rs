@@ -1,5 +1,6 @@
 // mod serialize;
 mod simulation;
+mod util;
 mod visualization;
 
 use std::{
@@ -20,7 +21,6 @@ use visualization::*;
 use wgpu::*;
 use winit::{
     dpi::LogicalSize,
-    event::Event,
     event_loop::EventLoop,
     window::{Window, WindowBuilder},
 };

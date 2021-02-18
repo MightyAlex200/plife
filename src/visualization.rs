@@ -1,7 +1,9 @@
-use crate::simulation::Simulation;
+use crate::{
+    simulation::Simulation,
+    util::{BindableBuffer, VEC3_SIZE},
+};
 use std::{
     io::{Cursor, Write},
-    num::NonZeroU64,
     time::{Duration, Instant},
 };
 use wgpu::*;
@@ -15,7 +17,6 @@ pub struct Visualization {
     pub simulation: Simulation,
     pub ticks: u64,
     pub ticks_per_frame: u16,
-    colors: Buffer,
     ticks_just_now: u16,
     last_update_duration: Duration,
     pipeline: RenderPipeline,
@@ -31,24 +32,23 @@ impl Visualization {
         surface: &Surface,
         simulation: Simulation,
     ) -> Self {
-        let colors = device.create_buffer(&BufferDescriptor {
-            label: Some("visualization_colors"),
-            size: (simulation.ruleset.num_point_types * std::mem::size_of::<f32>() as u32 * 3)
-                as u64,
-            usage: BufferUsage::UNIFORM,
-            mapped_at_creation: true,
-        });
-        {
-            let slice = colors.slice(..);
-            let mut range = slice.get_mapped_range_mut();
-            let mut cursor = Cursor::new(&mut *range);
-            for _ in 0..simulation.ruleset.num_point_types * 3 {
-                cursor
-                    .write_all(&rand::random::<f32>().to_le_bytes())
-                    .unwrap();
-            }
-        }
-        colors.unmap();
+        let colors = BindableBuffer::new(
+            &device,
+            BufferUsage::UNIFORM,
+            ShaderStage::FRAGMENT,
+            true,
+            simulation.ruleset.num_point_types as usize * VEC3_SIZE,
+            |colors| {
+                let slice = colors.slice(..);
+                let mut range = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *range);
+                for _ in 0..simulation.ruleset.num_point_types * 3 {
+                    cursor
+                        .write_all(&rand::random::<f32>().to_le_bytes())
+                        .unwrap();
+                }
+            },
+        );
 
         let shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: Some("render_shader"),
@@ -59,46 +59,10 @@ impl Visualization {
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
             entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStage::FRAGMENT,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
+                simulation.positions.bind_group_layout_entry(0),
+                simulation.globals.bind_group_layout_entry(1),
+                simulation.types.bind_group_layout_entry(2),
+                colors.bind_group_layout_entry(3),
             ],
         });
 
@@ -106,50 +70,10 @@ impl Visualization {
             label: Some("render_bind_group"),
             layout: &bind_group_layout,
             entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::Buffer {
-                        buffer: &simulation.positions,
-                        offset: 0,
-                        size: NonZeroU64::new(
-                            simulation.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
-                        ),
-                    },
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Buffer {
-                        buffer: &simulation.globals,
-                        offset: 0,
-                        size: NonZeroU64::new(
-                            (std::mem::size_of::<u32>()
-                                + std::mem::size_of::<u32>()
-                                + std::mem::size_of::<f32>()) as u64,
-                        ),
-                    },
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::Buffer {
-                        buffer: &simulation.types,
-                        offset: 0,
-                        size: NonZeroU64::new(
-                            simulation.num_points as u64 * std::mem::size_of::<f32>() as u64,
-                        ),
-                    },
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::Buffer {
-                        buffer: &colors,
-                        offset: 0,
-                        size: NonZeroU64::new(
-                            (simulation.ruleset.num_point_types
-                                * std::mem::size_of::<f32>() as u32
-                                * 3) as u64,
-                        ),
-                    },
-                },
+                simulation.positions.bind_group_entry(0),
+                simulation.globals.bind_group_entry(1),
+                simulation.types.bind_group_entry(2),
+                colors.bind_group_entry(3),
             ],
         });
 
@@ -194,7 +118,6 @@ impl Visualization {
             swapchain,
             sc_desc,
             bind_group,
-            colors,
             ticks: 0,
             ticks_per_frame: 1,
             ticks_just_now: 0,
@@ -284,7 +207,7 @@ impl Visualization {
         mut self,
         device: Device,
         queue: Queue,
-        window: Window,
+        _window: Window,
         surface: Surface,
         event_loop: EventLoop<()>,
     ) -> ! {

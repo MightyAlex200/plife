@@ -1,12 +1,14 @@
 use std::{
     io::{Cursor, Write},
-    num::NonZeroU64,
+    mem::{size_of, size_of_val},
 };
 
 use rand::{thread_rng, Rng};
 use rand_distr::{Distribution, Normal};
 // use serde::{Deserialize, Serialize}; TODO serialization
 use wgpu::*;
+
+use crate::util::*;
 
 pub type Radius = f32;
 pub type Attraction = f32;
@@ -172,24 +174,17 @@ pub struct Simulation {
     pub num_points: u32,
     pub ruleset: Ruleset,
     pub walls: Walls,
-    pub positions: Buffer,
-    pub globals: Buffer,
-    pub types: Buffer,
-    positions_old: Buffer,
-    velocities: Buffer,
-    cache_max_r: Buffer,
-    cache_min_r: Buffer,
-    cache_attraction: Buffer,
-    step_buffer: Option<CommandBuffer>,
-    bind_group_layout: BindGroupLayout,
+    pub positions: BindableBuffer,
+    pub globals: BindableBuffer,
+    pub types: BindableBuffer,
+    positions_old: BindableBuffer,
+    velocities: BindableBuffer,
     bind_group: BindGroup,
     pipeline: ComputePipeline,
-    velocities_old: Buffer,
+    velocities_old: BindableBuffer,
 }
 
 impl Simulation {
-    pub const R_SMOOTH: f32 = 2.0;
-
     // utility
     fn generate_point_normal() -> (f32, f32) {
         let mut rng = thread_rng();
@@ -204,29 +199,13 @@ impl Simulation {
 
     pub fn new(device: &Device, num_points: u32, ruleset: Ruleset, walls: Walls) -> Self {
         // Buffers
-        fn create_buffer(
-            device: &Device,
-            label: Option<&'static str>,
-            size: u64,
-            usage: BufferUsage,
-            map_function: impl FnOnce(&mut Buffer),
-        ) -> Buffer {
-            let mut buf = device.create_buffer(&BufferDescriptor {
-                label,
-                size,
-                usage,
-                mapped_at_creation: true,
-            });
-            map_function(&mut buf);
-            buf.unmap();
-            buf
-        }
-
-        let positions = create_buffer(
+        // TODO: BindableBuffer::using_cursor
+        let positions = BindableBuffer::new(
             &device,
-            Some("positions"),
-            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
             BufferUsage::STORAGE | BufferUsage::COPY_SRC,
+            ShaderStage::all(),
+            false,
+            num_points as usize * VEC2_SIZE,
             |positions: &mut Buffer| {
                 let slice = positions.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -239,19 +218,21 @@ impl Simulation {
             },
         );
 
-        let positions_old = create_buffer(
+        let positions_old = BindableBuffer::new(
             &device,
-            Some("positions_old"),
-            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
             BufferUsage::STORAGE | BufferUsage::COPY_DST,
+            ShaderStage::all(),
+            false,
+            num_points as usize * VEC2_SIZE,
             |_| {},
         );
 
-        let velocities = create_buffer(
+        let velocities = BindableBuffer::new(
             &device,
-            Some("velocities"),
-            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
             BufferUsage::STORAGE | BufferUsage::COPY_SRC,
+            ShaderStage::COMPUTE,
+            false,
+            num_points as usize * VEC2_SIZE,
             |velocities| {
                 let slice = velocities.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -263,11 +244,12 @@ impl Simulation {
             },
         );
 
-        let velocities_old = create_buffer(
+        let velocities_old = BindableBuffer::new(
             &device,
-            Some("velocities_old"),
-            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
             BufferUsage::STORAGE | BufferUsage::COPY_DST,
+            ShaderStage::COMPUTE,
+            false,
+            num_points as usize * VEC2_SIZE,
             |_| {},
         );
 
@@ -275,12 +257,14 @@ impl Simulation {
         for _ in 0..num_points {
             types_vec.push(thread_rng().gen_range(0..ruleset.num_point_types));
         }
+
         let types_vec = types_vec;
-        let types = create_buffer(
+        let types = BindableBuffer::new(
             &device,
-            Some("types"),
-            num_points as u64 * std::mem::size_of::<PointType>() as u64,
             BufferUsage::UNIFORM,
+            ShaderStage::all(),
+            true,
+            num_points as usize * size_of::<PointType>(),
             |types: &mut Buffer| {
                 let slice = types.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -292,13 +276,14 @@ impl Simulation {
             },
         );
 
-        let cache_max_r = create_buffer(
+        let num_type_pairs = ruleset.num_point_types * ruleset.num_point_types;
+
+        let cache_max_r = BindableBuffer::new(
             &device,
-            Some("cache_max_r"),
-            (ruleset.num_point_types
-                * ruleset.num_point_types
-                * std::mem::size_of::<Radius>() as u32) as u64,
             BufferUsage::UNIFORM,
+            ShaderStage::COMPUTE,
+            true,
+            num_type_pairs as usize * size_of::<Radius>(),
             |cache_max_r: &mut Buffer| {
                 let slice = cache_max_r.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -313,13 +298,12 @@ impl Simulation {
             },
         );
 
-        let cache_min_r = create_buffer(
+        let cache_min_r = BindableBuffer::new(
             &device,
-            Some("cache_min_r"),
-            (ruleset.num_point_types
-                * ruleset.num_point_types
-                * std::mem::size_of::<Radius>() as u32) as u64,
             BufferUsage::UNIFORM,
+            ShaderStage::COMPUTE,
+            true,
+            num_type_pairs as usize * size_of::<Radius>(),
             |cache_min_r: &mut Buffer| {
                 let slice = cache_min_r.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -334,13 +318,12 @@ impl Simulation {
             },
         );
 
-        let cache_attraction = create_buffer(
+        let cache_attraction = BindableBuffer::new(
             &device,
-            Some("attraction"),
-            (ruleset.num_point_types
-                * ruleset.num_point_types
-                * std::mem::size_of::<Attraction>() as u32) as u64,
             BufferUsage::UNIFORM,
+            ShaderStage::COMPUTE,
+            true,
+            num_type_pairs as usize * size_of::<Attraction>(),
             |cache_attraction: &mut Buffer| {
                 let slice = cache_attraction.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -355,13 +338,14 @@ impl Simulation {
             },
         );
 
-        let globals = create_buffer(
+        let globals = BindableBuffer::new(
             &device,
-            Some("globals"),
-            (std::mem::size_of_val(&num_points)
-                + std::mem::size_of_val(&ruleset.num_point_types)
-                + std::mem::size_of_val(&ruleset.friction)) as u64,
             BufferUsage::UNIFORM,
+            ShaderStage::all(),
+            true,
+            size_of_val(&num_points)
+                + size_of_val(&ruleset.num_point_types)
+                + size_of_val(&ruleset.friction),
             |globals| {
                 let slice = globals.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -374,6 +358,18 @@ impl Simulation {
             },
         );
 
+        let buffers = [
+            &positions,
+            &positions_old,
+            &velocities,
+            &velocities_old,
+            &types,
+            &cache_max_r,
+            &cache_min_r,
+            &cache_attraction,
+            &globals,
+        ];
+
         // Bind groups
         // 0: positions
         // 1: positions_old
@@ -384,209 +380,8 @@ impl Simulation {
         // 6: cache_min_r
         // 7: cache_attraction
         // 8: globals
-        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("step_bindgroup_layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 3,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 4,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (num_points * std::mem::size_of::<PointType>() as u32) as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 5,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (ruleset.num_point_types
-                                * ruleset.num_point_types
-                                * std::mem::size_of::<Radius>() as u32)
-                                as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 6,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (ruleset.num_point_types
-                                * ruleset.num_point_types
-                                * std::mem::size_of::<Radius>() as u32)
-                                as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 7,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (ruleset.num_point_types
-                                * ruleset.num_point_types
-                                * std::mem::size_of::<Attraction>() as u32)
-                                as u64,
-                        ),
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 8,
-                    visibility: ShaderStage::COMPUTE,
-                    ty: BindingType::Buffer {
-                        ty: BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: NonZeroU64::new(
-                            (std::mem::size_of_val(&num_points)
-                                + std::mem::size_of_val(&ruleset.num_point_types)
-                                + std::mem::size_of_val(&ruleset.friction))
-                                as u64,
-                        ),
-                    },
-                    count: None,
-                },
-            ],
-        });
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("step_bindgroup"),
-            layout: &bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::Buffer {
-                        buffer: &positions,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Buffer {
-                        buffer: &positions_old,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 2,
-                    resource: BindingResource::Buffer {
-                        buffer: &velocities,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 3,
-                    resource: BindingResource::Buffer {
-                        buffer: &velocities_old,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 4,
-                    resource: BindingResource::Buffer {
-                        buffer: &types,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 5,
-                    resource: BindingResource::Buffer {
-                        buffer: &cache_max_r,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 6,
-                    resource: BindingResource::Buffer {
-                        buffer: &cache_min_r,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 7,
-                    resource: BindingResource::Buffer {
-                        buffer: &cache_attraction,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-                BindGroupEntry {
-                    binding: 8,
-                    resource: BindingResource::Buffer {
-                        buffer: &globals,
-                        offset: 0,
-                        size: None,
-                    },
-                },
-            ],
-        });
+        let bind_group_layout = BindableBuffer::bind_group_layout(&device, &buffers);
+        let bind_group = BindableBuffer::bind_group(&device, &buffers);
         // Pipeline
         let pipeline = device.create_compute_pipeline(&ComputePipelineDescriptor {
             label: Some("compute_pipeline"),
@@ -610,16 +405,11 @@ impl Simulation {
             velocities_old,
             num_points,
             walls,
-            cache_max_r,
-            cache_min_r,
             globals,
-            cache_attraction,
             types,
             ruleset,
-            bind_group_layout,
             bind_group,
             pipeline,
-            step_buffer: None,
         }
     }
     pub fn step(&mut self, device: &Device, queue: &Queue) {
@@ -627,16 +417,16 @@ impl Simulation {
             label: Some("step"),
         });
         encoder.copy_buffer_to_buffer(
-            &self.positions,
+            &self.positions.buffer,
             0,
-            &self.positions_old,
+            &self.positions_old.buffer,
             0,
             self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
         );
         encoder.copy_buffer_to_buffer(
-            &self.velocities,
+            &self.velocities.buffer,
             0,
-            &self.velocities_old,
+            &self.velocities_old.buffer,
             0,
             self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
         );
