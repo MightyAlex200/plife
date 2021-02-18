@@ -1,6 +1,6 @@
 // mod serialize;
 mod simulation;
-// mod visualization;
+mod visualization;
 
 use std::{
     convert::TryInto,
@@ -16,8 +16,14 @@ use std::{
 // use serialize::{RulesetSerialized, SimulationSerialized}; TODO serialization
 use simulation::*;
 use structopt::{clap::arg_enum, StructOpt};
+use visualization::*;
 use wgpu::*;
-// use visualization::*;
+use winit::{
+    dpi::LogicalSize,
+    event::Event,
+    event_loop::EventLoop,
+    window::{Window, WindowBuilder},
+};
 
 #[derive(StructOpt)]
 enum RulesetSource {
@@ -105,36 +111,17 @@ impl TryInto<Walls> for (WallsCLI, Option<f32>) {
     }
 }
 
-fn run_headed(simulation: Simulation) {
-    unimplemented!()
-    // let visualization = Visualization::with_random_colors(simulation);
-    // let res = ContextBuilder::new("plife", "Taylor")
-    //     .window_setup(WindowSetup {
-    //         title: "plife visualization".to_owned(),
-    //         samples: NumSamples::Four,
-    //         vsync: true,
-    //         icon: "".to_owned(),
-    //         srgb: false,
-    //     })
-    //     .window_mode(WindowMode {
-    //         width: 1200.0,
-    //         height: 800.0,
-    //         ..Default::default()
-    //     })
-    //     .modules(ModuleConf {
-    //         gamepad: false,
-    //         audio: false,
-    //     })
-    //     .build();
-    // let (ctx, event_loop) = match res {
-    //     Ok(tuple) => tuple,
-    //     Err(e) => {
-    //         eprintln!("Error initializing visualization: {}", e);
-    //         std::process::exit(1);
-    //     }
-    // };
-
-    // event::run(ctx, event_loop, visualization)
+fn run_headed(
+    device: Device,
+    queue: Queue,
+    adapter: Adapter,
+    surface: Surface,
+    simulation: Simulation,
+    window: Window,
+    event_loop: EventLoop<()>,
+) -> ! {
+    let visualization = Visualization::with_random_colors(&device, &adapter, &surface, simulation);
+    visualization.run(device, queue, window, surface, event_loop)
 }
 
 fn run_headless(
@@ -212,10 +199,27 @@ async fn main(args: RunSimulation) {
         headless_options,
     } = args;
     let instance = Instance::new(BackendBit::all());
+
+    let window_stuff = if headless {
+        None
+    } else {
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_resizable(false)
+            .with_inner_size(LogicalSize {
+                width: 800,
+                height: 600,
+            })
+            .build(&event_loop)
+            .expect("Failed to create window");
+        let surface = unsafe { instance.create_surface(&window) };
+        Some((window, event_loop, surface))
+    };
+
     let adapter = instance
         .request_adapter(&RequestAdapterOptions {
             power_preference: PowerPreference::HighPerformance,
-            compatible_surface: None, // TODO visualization
+            compatible_surface: window_stuff.as_ref().map(|(_, _, surface)| surface),
         })
         .await
         .expect("Unable to find a suitable graphics adapter");
@@ -299,6 +303,9 @@ async fn main(args: RunSimulation) {
             headless_options.steps,
         )
     } else {
-        run_headed(simulation)
+        let (window, event_loop, surface) = window_stuff.unwrap();
+        run_headed(
+            device, queue, adapter, surface, simulation, window, event_loop,
+        )
     }
 }

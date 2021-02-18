@@ -172,7 +172,8 @@ pub struct Simulation {
     pub num_points: u32,
     pub ruleset: Ruleset,
     pub walls: Walls,
-    positions: Buffer,
+    pub positions: Buffer,
+    pub globals: Buffer,
     positions_old: Buffer,
     velocities: Buffer,
     types: Buffer,
@@ -231,7 +232,7 @@ impl Simulation {
                 let mut view = slice.get_mapped_range_mut();
                 let mut cursor = Cursor::new(&mut *view);
                 for _ in 0..num_points {
-                    let point = Simulation::generate_point_uniform(500.0); // TODO Walls
+                    let point = Simulation::generate_point_uniform(100.0); // TODO Walls
                     cursor.write_all(&point.0.to_le_bytes()).unwrap();
                     cursor.write_all(&point.1.to_le_bytes()).unwrap();
                 }
@@ -250,7 +251,7 @@ impl Simulation {
             &device,
             Some("velocities"),
             (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-            BufferUsage::STORAGE,
+            BufferUsage::STORAGE | BufferUsage::COPY_SRC,
             |velocities| {
                 let slice = velocities.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -266,7 +267,7 @@ impl Simulation {
             &device,
             Some("velocities_old"),
             (num_points * std::mem::size_of::<f32>() as u32 * 2) as u64,
-            BufferUsage::STORAGE,
+            BufferUsage::STORAGE | BufferUsage::COPY_DST,
             |_| {},
         );
 
@@ -611,6 +612,7 @@ impl Simulation {
             walls,
             cache_max_r,
             cache_min_r,
+            globals,
             cache_attraction,
             types,
             ruleset,

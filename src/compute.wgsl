@@ -54,6 +54,7 @@ fn main() -> void {
     if (i >= globals.num_points) {
         return;
     }
+    velocities.data[i] = velocities_old.data[i];
     var p : vec2<f32> = positions_old.data[i];
     var p_type : u32 = types.data[i];
 
@@ -66,7 +67,7 @@ fn main() -> void {
 
         // TODO: walls
 
-        var r2 : f32 = delta.x * delta.x + delta.y + delta.y;
+        var r2 : f32 = delta.x * delta.x + delta.y * delta.y;
         var max_r : f32 = cache_max_r.data[pair_idx];
 
         if (r2 > max_r * max_r || r2 < 0.01) {
@@ -88,7 +89,7 @@ fn main() -> void {
             f = R_SMOOTH * min_r * (1.0 / (min_r + R_SMOOTH) - 1.0 / (r + R_SMOOTH));
         }
 
-        velocities.data[i] = velocities_old.data[i] + delta * tovec(f);
+        velocities.data[i] = velocities.data[i] + delta * tovec(f);
 
         continuing {
             j = j + 1u;
