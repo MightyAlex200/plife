@@ -48,6 +48,7 @@ impl Visualization {
                     .unwrap();
             }
         }
+        colors.unmap();
 
         let shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: Some("render_shader"),
@@ -70,6 +71,26 @@ impl Visualization {
                 },
                 BindGroupLayoutEntry {
                     binding: 1,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: ShaderStage::FRAGMENT,
+                    ty: BindingType::Buffer {
+                        ty: BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                BindGroupLayoutEntry {
+                    binding: 3,
                     visibility: ShaderStage::FRAGMENT,
                     ty: BindingType::Buffer {
                         ty: BufferBindingType::Uniform,
@@ -104,6 +125,28 @@ impl Visualization {
                             (std::mem::size_of::<u32>()
                                 + std::mem::size_of::<u32>()
                                 + std::mem::size_of::<f32>()) as u64,
+                        ),
+                    },
+                },
+                BindGroupEntry {
+                    binding: 2,
+                    resource: BindingResource::Buffer {
+                        buffer: &simulation.types,
+                        offset: 0,
+                        size: NonZeroU64::new(
+                            simulation.num_points as u64 * std::mem::size_of::<f32>() as u64,
+                        ),
+                    },
+                },
+                BindGroupEntry {
+                    binding: 3,
+                    resource: BindingResource::Buffer {
+                        buffer: &colors,
+                        offset: 0,
+                        size: NonZeroU64::new(
+                            (simulation.ruleset.num_point_types
+                                * std::mem::size_of::<f32>() as u32
+                                * 3) as u64,
                         ),
                     },
                 },
