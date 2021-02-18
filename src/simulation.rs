@@ -232,7 +232,7 @@ impl Simulation {
                 let mut view = slice.get_mapped_range_mut();
                 let mut cursor = Cursor::new(&mut *view);
                 for _ in 0..num_points {
-                    let point = Simulation::generate_point_uniform(100.0); // TODO Walls
+                    let point = Simulation::generate_point_uniform(500.0); // TODO Walls
                     cursor.write_all(&point.0.to_le_bytes()).unwrap();
                     cursor.write_all(&point.1.to_le_bytes()).unwrap();
                 }
@@ -305,7 +305,7 @@ impl Simulation {
                 let mut cursor = Cursor::new(&mut *view);
                 for y in 0..ruleset.num_point_types {
                     for x in 0..ruleset.num_point_types {
-                        let max_r = ruleset.min_r[types_vec[y as usize] as usize]
+                        let max_r = ruleset.max_r[types_vec[y as usize] as usize]
                             [types_vec[x as usize] as usize];
                         cursor.write_all(&max_r.to_le_bytes()).unwrap();
                     }

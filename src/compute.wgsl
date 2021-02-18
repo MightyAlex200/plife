@@ -12,7 +12,7 @@ struct Velocities {
 
 [[block]]
 struct Types {
-    data : [[stride(8)]] array<u32>;
+    data : [[stride(4)]] array<u32>;
 };
 
 [[block]]
@@ -28,7 +28,7 @@ struct CacheAttraction {
 [[block]]
 struct Globals {
     num_points : u32;
-    num_types: u32;
+    num_types : u32;
     friction : f32;
 };
 
