@@ -191,8 +191,11 @@ fn run_headless(
 }
 
 #[paw::main]
-#[tokio::main]
-async fn main(args: RunSimulation) {
+fn main(args: RunSimulation) {
+    futures::executor::block_on(main_async(args));
+}
+
+async fn main_async(args: RunSimulation) {
     let RunSimulation {
         simulation: simulation_source,
         headless,
@@ -249,7 +252,10 @@ async fn main(args: RunSimulation) {
             &DeviceDescriptor {
                 label: Some("main device"),
                 features: Features::default(),
-                limits: Limits::default(),
+                limits: Limits {
+                    max_uniform_buffer_binding_size: 12_582_912, // 12 MiB
+                    ..Limits::default()
+                },
             },
             None,
         )

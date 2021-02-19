@@ -178,10 +178,8 @@ pub struct Simulation {
     pub globals: BindableBuffer,
     pub types: BindableBuffer,
     positions_old: BindableBuffer,
-    velocities: BindableBuffer,
     bind_group: BindGroup,
     pipeline: ComputePipeline,
-    velocities_old: BindableBuffer,
 }
 
 impl Simulation {
@@ -242,15 +240,6 @@ impl Simulation {
                     cursor.write_all(&0.0f32.to_le_bytes()).unwrap();
                 }
             },
-        );
-
-        let velocities_old = BindableBuffer::new(
-            &device,
-            BufferUsage::STORAGE | BufferUsage::COPY_DST,
-            ShaderStage::COMPUTE,
-            false,
-            num_points as usize * VEC2_SIZE,
-            |_| {},
         );
 
         let mut types_vec = Vec::with_capacity(num_points as usize);
@@ -362,7 +351,6 @@ impl Simulation {
             &positions,
             &positions_old,
             &velocities,
-            &velocities_old,
             &types,
             &cache_max_r,
             &cache_min_r,
@@ -374,7 +362,6 @@ impl Simulation {
         // 0: positions
         // 1: positions_old
         // 2: velocities
-        // 3: velocities_old
         // 4: types
         // 5: cache_max_r
         // 6: cache_min_r
@@ -401,8 +388,6 @@ impl Simulation {
         Self {
             positions,
             positions_old,
-            velocities,
-            velocities_old,
             num_points,
             walls,
             globals,
@@ -420,13 +405,6 @@ impl Simulation {
             &self.positions.buffer,
             0,
             &self.positions_old.buffer,
-            0,
-            self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
-        );
-        encoder.copy_buffer_to_buffer(
-            &self.velocities.buffer,
-            0,
-            &self.velocities_old.buffer,
             0,
             self.num_points as u64 * std::mem::size_of::<f32>() as u64 * 2,
         );

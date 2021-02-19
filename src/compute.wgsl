@@ -35,12 +35,11 @@ struct Globals {
 [[group(0), binding(0)]] var<storage> positions : [[access(read_write)]] Positions;
 [[group(0), binding(1)]] var<storage> positions_old : [[access(read)]] Positions;
 [[group(0), binding(2)]] var<storage> velocities : [[access(read_write)]] Velocities;
-[[group(0), binding(3)]] var<storage> velocities_old : [[access(read)]] Velocities;
-[[group(0), binding(4)]] var<uniform> types : Types;
-[[group(0), binding(5)]] var<uniform> cache_max_r : CacheRadius;
-[[group(0), binding(6)]] var<uniform> cache_min_r : CacheRadius;
-[[group(0), binding(7)]] var<uniform> cache_attraction : CacheAttraction;
-[[group(0), binding(8)]] var<uniform> globals : Globals;
+[[group(0), binding(3)]] var<uniform> types : Types;
+[[group(0), binding(4)]] var<uniform> cache_max_r : CacheRadius;
+[[group(0), binding(5)]] var<uniform> cache_min_r : CacheRadius;
+[[group(0), binding(6)]] var<uniform> cache_attraction : CacheAttraction;
+[[group(0), binding(7)]] var<uniform> globals : Globals;
 
 [[builtin(global_invocation_id)]] var<in> global_invocation_id : vec3<u32>;
 
@@ -54,7 +53,6 @@ fn main() -> void {
     if (i >= globals.num_points) {
         return;
     }
-    velocities.data[i] = velocities_old.data[i];
     var p : vec2<f32> = positions_old.data[i];
     var p_type : u32 = types.data[i];
 

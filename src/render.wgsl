@@ -51,7 +51,7 @@ var<out> out_color: vec4<f32>;
 
 [[stage(fragment)]]
 fn main() {
-    var pos : vec2<f32> = (frag_coord.xy / vec2<f32>(800.0, 600.0) - vec2<f32>(0.5, 0.5)) * vec2<f32>(2.0, 2.0) * vec2<f32>(500.0, 500.0);
+    var pos : vec2<f32> = (frag_coord.xy / vec2<f32>(800.0, 600.0) - vec2<f32>(0.5, 0.5)) * vec2<f32>(2.0, 2.0) * vec2<f32>(500.0, 500.0); // TODO: this is stupid
     var i : u32 = 0u;
     var c : f32 = 10000.0;
     var color : vec3<f32>;
