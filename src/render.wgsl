@@ -70,13 +70,13 @@ fn main() {
     var normalized : vec2<f32> = (frag_coord.xy - vec2<f32>(width / 2.0, height / 2.0)) / square_size;
     var pos : vec2<f32> = normalized / vec2<f32>(render_globals.zoom, render_globals.zoom) + camera_pos;
     var i : u32 = 0u;
-    var c : f32 = 10000.0;
+    var c : u32 = 0u;
     var color : vec3<f32>;
     loop {
-        var c_new : f32 = distance(pos, positions.data[i]) / 5.0;
-        if (c_new < c) {
-            c = c_new;
+        if ((distance(pos, positions.data[i])) < 5.0) {
+            c = 1u;
             color = colors.data[ types.data[i] ];
+            break;
         }
         continuing {
             i = i + 1;
@@ -85,7 +85,9 @@ fn main() {
             }
         }
     }
-    c = clamp(c, 0.0, 1.0);
-    c = 1.0 - c;
-    out_color = vec4<f32>(color * vec3<f32>(c, c, c), 1.0);
+    if (c == 1u) {
+        out_color = vec4<f32>(color, 1.0);
+    } else {
+        out_color = vec4<f32>(0.0, 0.0, 0.0, 1.0);
+    }
 }
