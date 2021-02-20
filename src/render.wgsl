@@ -39,10 +39,20 @@ struct Colors {
     data: [[stride(12)]] array< vec3<f32> >;
 };
 
+[[block]]
+struct RenderGlobals {
+    x : f32;
+    y : f32;
+    width : u32;
+    height : u32;
+    zoom : f32;
+};
+
 [[group(0), binding(0)]] var<storage> positions : [[access(read)]] Positions;
 [[group(0), binding(1)]] var<uniform> globals : Globals;
 [[group(0), binding(2)]] var<uniform> types : Types;
 [[group(0), binding(3)]] var<uniform> colors : Colors;
+[[group(0), binding(4)]] var<uniform> render_globals : RenderGlobals;
 
 [[builtin(frag_coord)]] var<in> frag_coord : vec4<f32>;
 
@@ -51,12 +61,19 @@ var<out> out_color: vec4<f32>;
 
 [[stage(fragment)]]
 fn main() {
-    var pos : vec2<f32> = (frag_coord.xy / vec2<f32>(800.0, 600.0) - vec2<f32>(0.5, 0.5)) * vec2<f32>(2.0, 2.0) * vec2<f32>(500.0, 500.0); // TODO: this is stupid
+    var width : f32 = f32(render_globals.width);
+    var height : f32 = f32(render_globals.height);
+    var camera_pos : vec2<f32> = vec2<f32>(render_globals.x, render_globals.y);
+    var size : vec2<f32> = vec2<f32>(width, height);
+    var smallest_side : f32 = min(width, height);
+    var square_size : vec2<f32> = vec2<f32>(smallest_side, smallest_side);
+    var normalized : vec2<f32> = (frag_coord.xy - vec2<f32>(width / 2.0, height / 2.0)) / square_size;
+    var pos : vec2<f32> = normalized / vec2<f32>(render_globals.zoom, render_globals.zoom) + camera_pos;
     var i : u32 = 0u;
     var c : f32 = 10000.0;
     var color : vec3<f32>;
     loop {
-        var c_new : f32 = distance(pos, positions.data[i]);
+        var c_new : f32 = distance(pos, positions.data[i]) / 5.0;
         if (c_new < c) {
             c = c_new;
             color = colors.data[ types.data[i] ];

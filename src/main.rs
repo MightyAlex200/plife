@@ -208,7 +208,8 @@ async fn main_async(args: RunSimulation) {
     } else {
         let event_loop = EventLoop::new();
         let window = WindowBuilder::new()
-            .with_resizable(false)
+            .with_resizable(true)
+            .with_title("plife visualization")
             .with_inner_size(LogicalSize {
                 width: 800,
                 height: 600,

@@ -2,10 +2,14 @@ use crate::{
     simulation::Simulation,
     util::{BindableBuffer, VEC3_SIZE},
 };
+use async_executor::LocalExecutor;
 use std::{
     io::{Cursor, Write},
+    mem::size_of,
+    num::NonZeroU64,
     time::{Duration, Instant},
 };
+use wgpu::util::*;
 use wgpu::*;
 use winit::{
     event::{VirtualKeyCode, WindowEvent},
@@ -23,6 +27,14 @@ pub struct Visualization {
     swapchain: SwapChain,
     sc_desc: SwapChainDescriptor,
     bind_group: BindGroup,
+    render_globals: BindableBuffer,
+    staging_belt: StagingBelt,
+    executor: LocalExecutor<'static>,
+    // Camera
+    x: f32,
+    y: f32,
+    zoom: f32,
+    last_mouse_position: Option<winit::dpi::PhysicalPosition<f64>>,
 }
 
 impl Visualization {
@@ -50,6 +62,17 @@ impl Visualization {
             },
         );
 
+        let render_globals = BindableBuffer::new(
+            &device,
+            BufferUsage::UNIFORM | BufferUsage::COPY_DST,
+            ShaderStage::FRAGMENT,
+            true,
+            size_of::<f32>() * 3 + size_of::<u32>() * 2, // x + y + + width + height + zoom
+            |_| {},
+        );
+
+        let staging_belt = StagingBelt::new(render_globals.size);
+
         let shader = device.create_shader_module(&ShaderModuleDescriptor {
             label: Some("render_shader"),
             source: ShaderSource::Wgsl(include_str!("render.wgsl").into()),
@@ -63,6 +86,7 @@ impl Visualization {
                 simulation.globals.bind_group_layout_entry(1),
                 simulation.types.bind_group_layout_entry(2),
                 colors.bind_group_layout_entry(3),
+                render_globals.bind_group_layout_entry(4),
             ],
         });
 
@@ -74,6 +98,7 @@ impl Visualization {
                 simulation.globals.bind_group_entry(1),
                 simulation.types.bind_group_entry(2),
                 colors.bind_group_entry(3),
+                render_globals.bind_group_entry(4),
             ],
         });
 
@@ -123,6 +148,13 @@ impl Visualization {
             ticks_just_now: 0,
             last_update_duration: Duration::from_millis(1),
             pipeline,
+            render_globals,
+            staging_belt,
+            executor: LocalExecutor::new(),
+            x: 0.0,
+            y: 0.0,
+            zoom: 0.0007,
+            last_mouse_position: None,
         }
     }
 
@@ -138,11 +170,33 @@ impl Visualization {
         self.last_update_duration = end - start;
     }
 
-    fn render(&self, device: &Device, queue: &Queue) {
+    fn render(&mut self, device: &Device, queue: &Queue) {
         let frame = self.swapchain.get_current_frame().unwrap().output;
         let mut encoder = device.create_command_encoder(&CommandEncoderDescriptor {
             label: Some("render"),
         });
+        // Write render globals
+        {
+            let mut view = self.staging_belt.write_buffer(
+                &mut encoder,
+                &self.render_globals.buffer,
+                0,
+                NonZeroU64::new(self.render_globals.size).unwrap(),
+                &device,
+            );
+            let mut cursor = Cursor::new(&mut *view);
+            cursor.write_all(&self.x.to_le_bytes()).unwrap();
+            cursor.write_all(&self.y.to_le_bytes()).unwrap();
+            cursor.write_all(&self.sc_desc.width.to_le_bytes()).unwrap();
+            cursor
+                .write_all(&self.sc_desc.height.to_le_bytes())
+                .unwrap();
+            cursor.write_all(&self.zoom.to_le_bytes()).unwrap();
+            drop(cursor);
+            drop(view);
+            self.staging_belt.finish();
+        }
+        // Render pass
         {
             let mut render_pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("render_pass"),
@@ -161,6 +215,8 @@ impl Visualization {
             render_pass.draw(0..6, 0..1);
         }
         queue.submit(Some(encoder.finish()));
+
+        self.executor.spawn(self.staging_belt.recall()).detach();
     }
 
     fn handle_window_event(
@@ -169,6 +225,7 @@ impl Visualization {
         control_flow: &mut ControlFlow,
         device: &Device,
         surface: &Surface,
+        mouse_down: &mut bool,
     ) {
         match window_event {
             WindowEvent::Resized(size) => {
@@ -176,7 +233,6 @@ impl Visualization {
                 self.sc_desc.height = size.height;
                 self.swapchain = device.create_swap_chain(&surface, &self.sc_desc);
             }
-            WindowEvent::Moved(_) => {}
             WindowEvent::CloseRequested => {
                 *control_flow = ControlFlow::Exit;
             }
@@ -185,20 +241,39 @@ impl Visualization {
                     *control_flow = ControlFlow::Exit;
                 }
             }
-            WindowEvent::CursorMoved {
-                position: _position,
-                ..
-            } => {}
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(last_pos) = self.last_mouse_position {
+                    if *mouse_down {
+                        let delta = winit::dpi::PhysicalPosition {
+                            x: (position.x - last_pos.x)
+                                / self.zoom as f64
+                                / self.sc_desc.width as f64,
+                            y: (position.y - last_pos.y)
+                                / self.zoom as f64
+                                / self.sc_desc.height as f64,
+                        };
+                        self.x -= delta.x as f32;
+                        self.y -= delta.y as f32;
+                    }
+                }
+                self.last_mouse_position = Some(position);
+            }
             WindowEvent::MouseWheel {
-                delta: _delta,
-                phase: _phase,
+                delta: winit::event::MouseScrollDelta::LineDelta(_, lines),
+                phase: winit::event::TouchPhase::Moved,
                 ..
-            } => {}
-            WindowEvent::MouseInput {
-                state: _state,
-                button: _button,
-                ..
-            } => {}
+            } => {
+                if lines > 0.0 {
+                    self.zoom *= 1.1;
+                } else {
+                    self.zoom /= 1.1;
+                }
+            }
+            WindowEvent::MouseInput { state, button, .. } => {
+                if let winit::event::MouseButton::Left = button {
+                    *mouse_down = state == winit::event::ElementState::Pressed;
+                }
+            }
             _ => {}
         }
     }
@@ -211,6 +286,7 @@ impl Visualization {
         surface: Surface,
         event_loop: EventLoop<()>,
     ) -> ! {
+        let mut mouse_down = false;
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::Poll;
             match event {
@@ -218,9 +294,16 @@ impl Visualization {
                     event: window_event,
                     ..
                 } => {
-                    self.handle_window_event(window_event, control_flow, &device, &surface);
+                    self.handle_window_event(
+                        window_event,
+                        control_flow,
+                        &device,
+                        &surface,
+                        &mut mouse_down,
+                    );
                 }
                 winit::event::Event::MainEventsCleared => {
+                    while self.executor.try_tick() {}
                     self.update(&device, &queue);
                     self.render(&device, &queue);
                 }
@@ -230,90 +313,3 @@ impl Visualization {
         })
     }
 }
-
-// impl EventHandler for Visualization {
-//     fn mouse_wheel_event(&mut self, _ctx: &mut Context, _x: f32, y: f32) {
-//         if y > 0.0 {
-//             self.zoom *= 1.1;
-//         } else if y < 0.0 {
-//             self.zoom /= 1.1;
-//         }
-//     }
-
-//     fn mouse_motion_event(&mut self, ctx: &mut Context, _x: f32, _y: f32, dx: f32, dy: f32) {
-//         if input::mouse::button_pressed(ctx, MouseButton::Left) {
-//             self.camera_offset += Vec2::from((dx, dy)) / self.zoom;
-//         }
-//     }
-
-//     fn key_down_event(
-//         &mut self,
-//         _ctx: &mut Context,
-//         keycode: KeyCode,
-//         _keymods: ggez::event::KeyMods,
-//         repeat: bool,
-//     ) {
-//         if repeat {
-//             return;
-//         }
-//         let res = match keycode {
-//             KeyCode::LBracket => self.ticks_per_frame.checked_sub(1),
-//             KeyCode::RBracket => self.ticks_per_frame.checked_add(1),
-//             _ => return,
-//         };
-//         if let Some(new) = res {
-//             self.ticks_per_frame = new;
-//         }
-//     }
-
-//     fn draw(&mut self, ctx: &mut Context) -> GameResult {
-//         graphics::clear(ctx, graphics::Color::BLACK);
-
-//         let mut mesh_builder = MeshBuilder::new();
-
-//         let mut points = vec![Complex::new(0.0f32, 0.0f32); self.simulation.num_points as usize];
-//         self.simulation.positions.host(&mut points);
-
-//         let mut point_types = vec![PointType::default(); self.simulation.num_points as usize];
-//         self.simulation.types.host(&mut point_types);
-
-//         for (point, point_type) in points.into_iter().zip(point_types) {
-//             mesh_builder.circle(
-//                 DrawMode::fill(),
-//                 [point.re, point.im],
-//                 3.0,
-//                 0.1,
-//                 self.colors[point_type as usize].clone(),
-//             )?;
-//         }
-
-//         let mesh = mesh_builder.build(ctx)?;
-
-//         let draw_params = DrawParam {
-//             trans: Transform::Values {
-//                 dest: (self.camera_offset * self.zoom
-//                     + Vec2::from(ggez::graphics::size(ctx)) / 2.0)
-//                     .into(),
-//                 rotation: 0.0,
-//                 scale: Vec2::splat(self.zoom).into(),
-//                 offset: Vec2::new(0.0, 0.0).into(),
-//             },
-//             ..Default::default()
-//         };
-
-//         graphics::draw(ctx, &mesh, draw_params)?;
-
-//         let fps = (1.0 / ggez::timer::delta(ctx).as_secs_f32()) as u16;
-//         let tps = ((1.0 / self.last_update_duration.as_secs_f32()) as u16).min(fps)
-//             * self.ticks_per_frame;
-//         let target_tps = self.ticks_per_frame * 60;
-//         let fps_text = Text::new(format!(
-//             "fps: {}\ntps: {}\ntarget tps: {}",
-//             fps, tps, target_tps
-//         ));
-
-//         graphics::draw::<_, graphics::DrawParam>(ctx, &fps_text, Default::default())?;
-
-//         graphics::present(ctx)
-//     }
-// }
