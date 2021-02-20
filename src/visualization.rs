@@ -341,10 +341,12 @@ impl Visualization {
                                 / self.sc_desc.height as f64,
                         };
                         let smallest_dimension = self.sc_desc.width.min(self.sc_desc.height);
-                        self.x -=
-                            delta.x as f32 * self.sc_desc.width as f32 / smallest_dimension as f32;
-                        self.y +=
-                            delta.y as f32 * self.sc_desc.height as f32 / smallest_dimension as f32;
+                        self.x -= delta.x as f32 * self.sc_desc.width as f32
+                            / smallest_dimension as f32
+                            * 2.0;
+                        self.y += delta.y as f32 * self.sc_desc.height as f32
+                            / smallest_dimension as f32
+                            * 2.0;
                     }
                 }
                 self.last_mouse_position = Some(position);
