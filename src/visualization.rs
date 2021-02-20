@@ -1,6 +1,6 @@
 use crate::{
     simulation::Simulation,
-    util::{BindableBuffer, VEC3_SIZE},
+    util::{BindableBuffer, VEC2_SIZE, VEC3_SIZE},
 };
 use async_executor::LocalExecutor;
 use std::{
@@ -21,6 +21,8 @@ pub struct Visualization {
     pub simulation: Simulation,
     pub ticks: u64,
     pub ticks_per_frame: u16,
+    vertex_buffer: BindableBuffer,
+    index_buffer: BindableBuffer,
     ticks_just_now: u16,
     last_update_duration: Duration,
     pipeline: RenderPipeline,
@@ -38,6 +40,9 @@ pub struct Visualization {
 }
 
 impl Visualization {
+    const CIRCLE_VERTS: u32 = 16;
+    const CIRCLE_RADIUS: f32 = 5.0;
+
     pub fn with_random_colors(
         device: &Device,
         adapter: &Adapter,
@@ -47,7 +52,7 @@ impl Visualization {
         let colors = BindableBuffer::new(
             &device,
             BufferUsage::UNIFORM,
-            ShaderStage::FRAGMENT,
+            ShaderStage::VERTEX,
             true,
             simulation.ruleset.num_point_types as usize * VEC3_SIZE,
             |colors| {
@@ -65,10 +70,56 @@ impl Visualization {
         let render_globals = BindableBuffer::new(
             &device,
             BufferUsage::UNIFORM | BufferUsage::COPY_DST,
-            ShaderStage::FRAGMENT,
+            ShaderStage::VERTEX,
             true,
             size_of::<f32>() * 3 + size_of::<u32>() * 2, // x + y + + width + height + zoom
             |_| {},
+        );
+
+        let vertex_buffer = BindableBuffer::new(
+            &device,
+            BufferUsage::VERTEX,
+            ShaderStage::VERTEX,
+            false,
+            VEC2_SIZE as u32 * (Self::CIRCLE_VERTS + 1),
+            |vert_buf| {
+                let slice = vert_buf.slice(..);
+                let mut range = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *range);
+                for _ in 0..2 {
+                    cursor.write_all(&0.0f32.to_le_bytes()).unwrap();
+                }
+                for i in 0..Self::CIRCLE_VERTS {
+                    let i = i as f32 / Self::CIRCLE_VERTS as f32 * 2.0 * std::f32::consts::PI;
+                    let x = i.cos() * Self::CIRCLE_RADIUS;
+                    let y = i.sin() * Self::CIRCLE_RADIUS;
+                    cursor.write_all(&x.to_le_bytes()).unwrap();
+                    cursor.write_all(&y.to_le_bytes()).unwrap();
+                }
+            },
+        );
+
+        let index_buffer = BindableBuffer::new(
+            &device,
+            BufferUsage::INDEX,
+            ShaderStage::VERTEX,
+            false,
+            size_of::<u32>() as u32 * Self::CIRCLE_VERTS * 3,
+            |idx_buf| {
+                let slice = idx_buf.slice(..);
+                let mut range = slice.get_mapped_range_mut();
+                let mut cursor = Cursor::new(&mut *range);
+                for i in 0..Self::CIRCLE_VERTS {
+                    let i = i + 1;
+                    cursor.write_all(&0u32.to_le_bytes()).unwrap();
+
+                    cursor.write_all(&i.to_le_bytes()).unwrap();
+
+                    cursor
+                        .write_all(&((i % Self::CIRCLE_VERTS) + 1).to_le_bytes())
+                        .unwrap();
+                }
+            },
         );
 
         let staging_belt = StagingBelt::new(render_globals.size);
@@ -82,11 +133,10 @@ impl Visualization {
         let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
             label: None,
             entries: &[
-                simulation.positions.bind_group_layout_entry(0),
-                simulation.globals.bind_group_layout_entry(1),
+                simulation.globals.bind_group_layout_entry(0),
+                render_globals.bind_group_layout_entry(1),
                 simulation.types.bind_group_layout_entry(2),
                 colors.bind_group_layout_entry(3),
-                render_globals.bind_group_layout_entry(4),
             ],
         });
 
@@ -94,11 +144,10 @@ impl Visualization {
             label: Some("render_bind_group"),
             layout: &bind_group_layout,
             entries: &[
-                simulation.positions.bind_group_entry(0),
-                simulation.globals.bind_group_entry(1),
+                simulation.globals.bind_group_entry(0),
+                render_globals.bind_group_entry(1),
                 simulation.types.bind_group_entry(2),
                 colors.bind_group_entry(3),
-                render_globals.bind_group_entry(4),
             ],
         });
 
@@ -116,7 +165,26 @@ impl Visualization {
             vertex: VertexState {
                 module: &shader,
                 entry_point: "main",
-                buffers: &[],
+                buffers: &[
+                    VertexBufferLayout {
+                        array_stride: VEC2_SIZE as u64,
+                        step_mode: InputStepMode::Vertex,
+                        attributes: &[VertexAttribute {
+                            format: VertexFormat::Float2,
+                            offset: 0,
+                            shader_location: 0,
+                        }],
+                    },
+                    VertexBufferLayout {
+                        array_stride: VEC2_SIZE as u64,
+                        step_mode: InputStepMode::Instance,
+                        attributes: &[VertexAttribute {
+                            format: VertexFormat::Float2,
+                            offset: 0,
+                            shader_location: 1,
+                        }],
+                    },
+                ],
             },
             primitive: PrimitiveState::default(),
             depth_stencil: None,
@@ -155,6 +223,8 @@ impl Visualization {
             y: 0.0,
             zoom: 0.0007,
             last_mouse_position: None,
+            vertex_buffer,
+            index_buffer,
         }
     }
 
@@ -204,15 +274,22 @@ impl Visualization {
                     attachment: &frame.view,
                     resolve_target: None,
                     ops: Operations {
-                        load: LoadOp::Load,
+                        load: LoadOp::Clear(Color::BLACK),
                         store: true,
                     },
                 }],
                 depth_stencil_attachment: None,
             });
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.simulation.positions.buffer.slice(..));
+            render_pass.set_index_buffer(self.index_buffer.buffer.slice(..), IndexFormat::Uint32);
             render_pass.set_pipeline(&self.pipeline);
             render_pass.set_bind_group(0, &self.bind_group, &[]);
-            render_pass.draw(0..6, 0..1);
+            render_pass.draw_indexed(
+                0..(Self::CIRCLE_VERTS * 3),
+                0,
+                0..self.simulation.num_points,
+            );
         }
         queue.submit(Some(encoder.finish()));
 
@@ -253,7 +330,7 @@ impl Visualization {
                                 / self.sc_desc.height as f64,
                         };
                         self.x -= delta.x as f32;
-                        self.y -= delta.y as f32;
+                        self.y += delta.y as f32;
                     }
                 }
                 self.last_mouse_position = Some(position);

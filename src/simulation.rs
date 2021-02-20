@@ -200,7 +200,7 @@ impl Simulation {
         // TODO: BindableBuffer::using_cursor
         let positions = BindableBuffer::new(
             &device,
-            BufferUsage::STORAGE | BufferUsage::COPY_SRC,
+            BufferUsage::STORAGE | BufferUsage::COPY_SRC | BufferUsage::VERTEX,
             ShaderStage::all(),
             false,
             num_points as usize * VEC2_SIZE,
