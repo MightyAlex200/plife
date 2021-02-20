@@ -4,11 +4,9 @@ use std::{
 };
 
 use rand::{thread_rng, Rng};
-use rand_distr::{Distribution, Normal};
-// use serde::{Deserialize, Serialize}; TODO serialization
 use wgpu::*;
 
-use crate::util::*;
+use crate::{serialize::*, util::*};
 
 pub type Radius = f32;
 pub type Attraction = f32;
@@ -25,145 +23,6 @@ pub struct Ruleset {
     pub friction: Friction,
 }
 
-/// Stores values for randomly generating [Ruleset]s
-#[derive(Debug)]
-pub struct RulesetTemplate {
-    pub min_types: PointType,
-    pub max_types: PointType,
-    pub min_friction: Friction,
-    pub max_friction: Friction,
-    pub min_r_lower: Radius,
-    pub min_r_upper: Radius,
-    pub max_r_lower: Radius,
-    pub max_r_upper: Radius,
-    pub attractions_mean: Attraction,
-    pub attractions_std: Attraction,
-}
-
-impl RulesetTemplate {
-    pub fn generate(&self) -> Ruleset {
-        let num_point_types = thread_rng().gen_range(self.min_types..=self.max_types);
-
-        // un-idiomatic but I'm not smart :(
-
-        fn gen_2d_vec_uniform(n: PointType, min: Radius, max: Radius) -> Vec<Vec<Radius>> {
-            let mut vec1 = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                let mut vec2 = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    vec2.push(thread_rng().gen_range(min..=max));
-                }
-                vec1.push(vec2)
-            }
-            vec1
-        }
-
-        fn gen_2d_vec_normal(
-            n: PointType,
-            mean: Attraction,
-            std_dev: Attraction,
-        ) -> Vec<Vec<Radius>> {
-            let dist = Normal::new(mean, std_dev).unwrap();
-            let mut rng = thread_rng();
-            let mut vec1 = Vec::with_capacity(n as usize);
-            for _ in 0..n {
-                let mut vec2 = Vec::with_capacity(n as usize);
-                for _ in 0..n {
-                    vec2.push(dist.sample(&mut rng));
-                }
-                vec1.push(vec2);
-            }
-            vec1
-        }
-
-        Ruleset {
-            num_point_types,
-            min_r: gen_2d_vec_uniform(num_point_types, self.min_r_lower, self.min_r_upper),
-            max_r: gen_2d_vec_uniform(num_point_types, self.max_r_lower, self.max_r_upper),
-            attractions: gen_2d_vec_normal(
-                num_point_types,
-                self.attractions_mean,
-                self.attractions_std,
-            ),
-            friction: thread_rng().gen_range(self.min_friction..=self.max_friction),
-        }
-    }
-}
-
-pub const COOL_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 12,
-    max_types: 12,
-    attractions_mean: -0.01,
-    attractions_std: 0.04,
-    min_r_lower: 0.0,
-    min_r_upper: 20.0,
-    max_r_upper: 500.0,
-    max_r_lower: 10.0,
-    max_friction: 0.05,
-    min_friction: 0.05,
-};
-pub const DIVERSITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 12,
-    max_types: 12,
-    attractions_mean: -0.01,
-    attractions_std: 0.04,
-    min_r_lower: 0.0,
-    min_r_upper: 20.0,
-    max_r_upper: 60.0,
-    max_r_lower: 10.0,
-    max_friction: 0.05,
-    min_friction: 0.05,
-};
-pub const BALANCED_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 9,
-    max_types: 9,
-    attractions_mean: -0.02,
-    attractions_std: 0.06,
-    min_r_lower: 0.0,
-    min_r_upper: 20.0,
-    max_r_lower: 20.0,
-    max_r_upper: 70.0,
-    min_friction: 0.05,
-    max_friction: 0.05,
-};
-pub const CHAOS_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 6,
-    max_types: 6,
-    attractions_mean: 0.02,
-    attractions_std: 0.04,
-    min_r_lower: 0.0,
-    min_r_upper: 30.0,
-    max_r_lower: 30.0,
-    max_r_upper: 100.0,
-    min_friction: 0.01,
-    max_friction: 0.01,
-};
-pub const HOMOGENEITY_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 4,
-    max_types: 4,
-    attractions_mean: 0.0,
-    attractions_std: 0.04,
-    min_r_lower: 10.0,
-    min_r_upper: 10.0,
-    max_r_lower: 10.0,
-    max_r_upper: 80.0,
-    min_friction: 0.05,
-    max_friction: 0.05,
-};
-pub const QUIESCENCE_TEMPLATE: RulesetTemplate = RulesetTemplate {
-    min_types: 6,
-    max_types: 6,
-    attractions_mean: -0.02,
-    attractions_std: 0.1,
-    min_r_lower: 10.0,
-    min_r_upper: 20.0,
-    max_r_lower: 20.0,
-    max_r_upper: 60.0,
-    min_friction: 0.2,
-    max_friction: 0.2,
-};
-
-// #[derive(Serialize, Deserialize)] TODO serialization
 pub enum Walls {
     None,
     Square(f32),
@@ -183,19 +42,9 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    // utility
-    fn generate_point_normal() -> (f32, f32) {
-        let mut rng = thread_rng();
-        let normal = Normal::new(0.0, 200.0).unwrap();
-        (rng.sample(normal), rng.sample(normal))
-    }
-
-    fn generate_point_uniform(dist: f32) -> (f32, f32) {
-        let mut rng = thread_rng();
-        (rng.gen_range(-dist..dist), rng.gen_range(-dist..dist))
-    }
-
-    pub fn new(device: &Device, num_points: u32, ruleset: Ruleset, walls: Walls) -> Self {
+    pub fn from_config(device: &Device, config: Config) -> Self {
+        let (ruleset, walls, points) = config.sample();
+        let num_points = points.len() as u32;
         // Buffers
         // TODO: BindableBuffer::using_cursor
         let positions = BindableBuffer::new(
@@ -208,13 +57,7 @@ impl Simulation {
                 let slice = positions.slice(..);
                 let mut view = slice.get_mapped_range_mut();
                 let mut cursor = Cursor::new(&mut *view);
-                for _ in 0..num_points {
-                    let point = match walls {
-                        Walls::None => Simulation::generate_point_normal(),
-                        Walls::Square(dist) | Walls::Wrapping(dist) => {
-                            Simulation::generate_point_uniform(dist)
-                        }
-                    };
+                for point in points {
                     cursor.write_all(&point.0.to_le_bytes()).unwrap();
                     cursor.write_all(&point.1.to_le_bytes()).unwrap();
                 }

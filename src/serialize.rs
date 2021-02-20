@@ -1,196 +1,208 @@
-use arrayfire::{Array, Dim4};
-use num_complex::Complex;
-use serde::{Deserialize, Serialize};
+use rand::{thread_rng, Rng};
+use rand_distr::{
+    num_traits::{NumCast, ToPrimitive},
+    Normal,
+};
+use serde::Deserialize;
 
-use crate::simulation::*;
+use crate::simulation::{Ruleset, Walls};
 
-#[derive(Serialize, Deserialize)]
-pub struct Dim4Serialized(u64, u64, u64, u64);
-
-#[derive(Serialize, Deserialize)]
-pub struct RulesetSerialized {
-    pub num_point_types: PointType,
-    pub min_r_vals: Vec<Radius>,
-    pub min_r_dims: Dim4Serialized,
-    pub max_r_vals: Vec<Radius>,
-    pub max_r_dims: Dim4Serialized,
-    pub attractions_vals: Vec<Attraction>,
-    pub attractions_dims: Dim4Serialized,
-    pub friction: Friction,
+#[derive(Deserialize)]
+pub struct Config {
+    pub ruleset: RulesetConfig,
+    pub walls: WallsConfig,
+    pub points: PointsConfig,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct ComplexSerialized<T> {
-    real: T,
-    imag: T,
+#[derive(Deserialize, Clone)]
+#[serde(untagged)]
+pub enum Distribution<T> {
+    Const(T),
+    Uniform { min: T, max: T },
+    Normal { mean: T, std: T },
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct SimulationSerialized {
-    pub positions_vals: Vec<ComplexSerialized<f32>>,
-    pub positions_dims: Dim4Serialized,
-    pub velocities_vals: Vec<ComplexSerialized<f32>>,
-    pub velocities_dims: Dim4Serialized,
-    pub types_vals: Vec<PointType>,
-    pub types_dims: Dim4Serialized,
-    pub num_points: u64,
-    pub ruleset: RulesetSerialized,
-    pub walls: Walls,
-    // TODO: do not store these!
-    pub cache_max_r_vals: Vec<Radius>,
-    pub cache_max_r_dims: Dim4Serialized,
-    pub cache_min_r_vals: Vec<Radius>,
-    pub cache_min_r_dims: Dim4Serialized,
-    pub cache_attraction_vals: Vec<Attraction>,
-    pub cache_attraction_dims: Dim4Serialized,
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum RulesetConfig {
+    Procedural(RulesetGenerationConfig),
+    Precise {
+        types: Vec<TypeRuleset>,
+        friction: Distribution<f32>,
+    },
 }
 
-impl Into<Dim4> for Dim4Serialized {
-    fn into(self) -> Dim4 {
-        let Dim4Serialized(x, y, z, w) = self;
-        Dim4::new(&[x, y, z, w])
+#[derive(Deserialize)]
+pub struct RulesetGenerationConfig {
+    pub types: Distribution<u32>,
+    pub attractions: Distribution<f32>,
+    pub min_r: Distribution<f32>,
+    pub max_r: Distribution<f32>,
+    pub friction: Distribution<f32>,
+}
+
+#[derive(Deserialize)]
+pub struct TypeRuleset {
+    pub attractions: Vec<Distribution<f32>>,
+    pub min_r: Vec<Distribution<f32>>,
+    pub max_r: Vec<Distribution<f32>>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum WallsConfig {
+    None,
+    Wrapping { dist: Distribution<f32> },
+    Square { dist: Distribution<f32> },
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum PointsConfig {
+    Simple(Distribution<u32>),
+    Complex(Vec<PointSpawnConfig>),
+}
+
+#[derive(Deserialize)]
+pub struct PointSpawnConfig {
+    pub num: Distribution<u32>,
+    pub x: Distribution<f32>,
+    pub y: Distribution<f32>,
+}
+
+impl Config {
+    pub fn sample(self) -> (Ruleset, Walls, Vec<(f32, f32)>) {
+        let ruleset = self.ruleset.sample();
+        let walls = self.walls.sample();
+        let points = self.points.sample(&walls);
+        (ruleset, walls, points)
     }
 }
 
-impl Into<Ruleset> for RulesetSerialized {
-    fn into(self) -> Ruleset {
+macro_rules! typeruleset_map {
+    ($types:expr, $prop:ident) => {
+        $types
+            .iter()
+            .map(|ruleset| {
+                ruleset
+                    .$prop
+                    .iter()
+                    .map(|dist| dist.clone().sample())
+                    .collect::<Vec<f32>>()
+            })
+            .collect::<Vec<Vec<f32>>>()
+    };
+}
+
+impl RulesetConfig {
+    fn sample(self) -> Ruleset {
+        match self {
+            RulesetConfig::Procedural(gen_rules) => gen_rules.sample(),
+            RulesetConfig::Precise { types, friction } => Ruleset {
+                num_point_types: types.len() as u32,
+                min_r: typeruleset_map!(types, min_r),
+                max_r: typeruleset_map!(types, max_r),
+                attractions: typeruleset_map!(types, attractions),
+                friction: friction.sample(),
+            },
+        }
+    }
+}
+
+impl RulesetGenerationConfig {
+    fn sample(self) -> Ruleset {
+        fn sample_per_pair(num_point_types: u32, dist: Distribution<f32>) -> Vec<Vec<f32>> {
+            let mut vec1 = Vec::with_capacity(num_point_types as usize);
+            for _ in 0..num_point_types {
+                let mut vec2 = Vec::with_capacity(num_point_types as usize);
+                for _ in 0..num_point_types {
+                    vec2.push(dist.clone().sample());
+                }
+                vec1.push(vec2);
+            }
+            vec1
+        }
+
+        let num_point_types = self.types.sample();
         Ruleset {
-            num_point_types: self.num_point_types,
-            min_r: Array::new(&self.min_r_vals, self.min_r_dims.into()),
-            max_r: Array::new(&self.max_r_vals, self.max_r_dims.into()),
-            attractions: Array::new(&self.attractions_vals, self.attractions_dims.into()),
-            friction: self.friction,
+            num_point_types,
+            min_r: sample_per_pair(num_point_types, self.min_r),
+            max_r: sample_per_pair(num_point_types, self.max_r),
+            attractions: sample_per_pair(num_point_types, self.attractions),
+            friction: self.friction.sample(),
         }
     }
 }
 
-impl Into<Simulation> for SimulationSerialized {
-    fn into(self) -> Simulation {
-        Simulation {
-            positions: Array::new(
-                &self
-                    .positions_vals
-                    .into_iter()
-                    .map(Into::<Complex<f32>>::into)
-                    .collect::<Vec<_>>(),
-                self.positions_dims.into(),
-            ),
-            velocities: Array::new(
-                &self
-                    .velocities_vals
-                    .into_iter()
-                    .map(Into::<Complex<f32>>::into)
-                    .collect::<Vec<_>>(),
-                self.velocities_dims.into(),
-            ),
-            types: Array::new(&self.types_vals, self.types_dims.into()),
-            num_points: self.num_points,
-            ruleset: self.ruleset.into(),
-            walls: self.walls,
-            cache_max_r: Array::new(&self.cache_max_r_vals, self.cache_max_r_dims.into()),
-            cache_min_r: Array::new(&self.cache_min_r_vals, self.cache_min_r_dims.into()),
-            cache_attraction: Array::new(
-                &self.cache_attraction_vals,
-                self.cache_attraction_dims.into(),
-            ),
+impl WallsConfig {
+    fn sample(self) -> Walls {
+        match self {
+            WallsConfig::None => Walls::None,
+            WallsConfig::Wrapping { dist } => Walls::Wrapping(dist.sample()),
+            WallsConfig::Square { dist } => Walls::Square(dist.sample()),
         }
     }
 }
 
-impl<T> Into<Complex<T>> for ComplexSerialized<T> {
-    fn into(self) -> Complex<T> {
-        Complex::new(self.real, self.imag)
-    }
-}
-
-// other way
-
-impl Into<SimulationSerialized> for Simulation {
-    fn into(self) -> SimulationSerialized {
-        let mut positions_vals: Vec<Complex<f32>> =
-            vec![Complex::new(0.0, 0.0); self.positions.elements()];
-        let positions_dims = self.positions.dims().into();
-        self.positions.host(&mut positions_vals);
-        let positions_vals = positions_vals
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        let mut velocities_vals: Vec<Complex<f32>> =
-            vec![Complex::new(0.0, 0.0); self.velocities.elements()];
-        let velocities_dims = self.velocities.dims().into();
-        self.velocities.host(&mut velocities_vals);
-        let velocities_vals = velocities_vals
-            .into_iter()
-            .map(Into::into)
-            .collect::<Vec<_>>();
-        let mut types_vals = vec![0; self.types.elements()];
-        let types_dims = self.types.dims().into();
-        self.types.host(&mut types_vals);
-        let mut cache_max_r_vals = vec![0.0; self.cache_max_r.elements()];
-        let cache_max_r_dims = self.cache_max_r.dims().into();
-        self.cache_max_r.host(&mut cache_max_r_vals);
-        let mut cache_min_r_vals = vec![0.0; self.cache_min_r.elements()];
-        let cache_min_r_dims = self.cache_min_r.dims().into();
-        self.cache_min_r.host(&mut cache_min_r_vals);
-        let mut cache_attraction_vals = vec![0.0; self.cache_attraction.elements()];
-        let cache_attraction_dims = self.cache_attraction.dims().into();
-        self.cache_attraction.host(&mut cache_attraction_vals);
-        SimulationSerialized {
-            positions_vals,
-            positions_dims,
-            velocities_vals,
-            velocities_dims,
-            types_vals,
-            types_dims,
-            num_points: self.num_points,
-            ruleset: self.ruleset.into(),
-            walls: self.walls.into(),
-            cache_max_r_vals,
-            cache_max_r_dims,
-            cache_min_r_vals,
-            cache_min_r_dims,
-            cache_attraction_vals,
-            cache_attraction_dims,
+impl PointsConfig {
+    fn sample(self, walls: &Walls) -> Vec<(f32, f32)> {
+        match self {
+            PointsConfig::Simple(dist) => {
+                let distribution = match walls {
+                    Walls::None => Distribution::Normal {
+                        mean: 0.0,
+                        std: 5.0,
+                    },
+                    Walls::Square(dist) | Walls::Wrapping(dist) => Distribution::Uniform {
+                        min: -dist,
+                        max: *dist,
+                    },
+                };
+                let num_points = dist.sample();
+                let mut vec = Vec::with_capacity(num_points as usize);
+                for _ in 0..num_points {
+                    let x = distribution.clone().sample();
+                    let y = distribution.clone().sample();
+                    vec.push((x, y));
+                }
+                vec
+            }
+            PointsConfig::Complex(spawns) => spawns
+                .into_iter()
+                .map(|spawn| {
+                    let num = spawn.num.sample();
+                    let mut vec = Vec::with_capacity(num as usize);
+                    for _ in 0..num {
+                        let x = spawn.x.clone().sample();
+                        let y = spawn.y.clone().sample();
+                        vec.push((x, y));
+                    }
+                    vec
+                })
+                .flatten()
+                .collect::<Vec<(f32, f32)>>(),
         }
     }
 }
 
-impl Into<RulesetSerialized> for Ruleset {
-    fn into(self) -> RulesetSerialized {
-        let mut min_r_vals = vec![0.0; self.min_r.elements()];
-        let min_r_dims = self.min_r.dims().into();
-        self.min_r.host(&mut min_r_vals);
-        let mut max_r_vals = vec![0.; self.max_r.elements()];
-        let max_r_dims = self.max_r.dims().into();
-        self.max_r.host(&mut max_r_vals);
-        let mut attractions_vals = vec![0.0; self.attractions.elements()];
-        let attractions_dims = self.attractions.dims().into();
-        self.attractions.host(&mut attractions_vals);
-        RulesetSerialized {
-            num_point_types: self.num_point_types,
-            min_r_vals,
-            min_r_dims,
-            max_r_vals,
-            max_r_dims,
-            attractions_vals,
-            attractions_dims,
-            friction: self.friction,
-        }
-    }
-}
-
-impl Into<Dim4Serialized> for Dim4 {
-    fn into(self) -> Dim4Serialized {
-        let vals = self.get();
-        Dim4Serialized(vals[0], vals[1], vals[2], vals[3])
-    }
-}
-
-impl<T> Into<ComplexSerialized<T>> for Complex<T> {
-    fn into(self) -> ComplexSerialized<T> {
-        ComplexSerialized {
-            real: self.re,
-            imag: self.im,
+impl<T> Distribution<T>
+where
+    T: ToPrimitive + NumCast,
+{
+    fn sample(self) -> T {
+        match self {
+            Distribution::Const(t) => t,
+            Distribution::Uniform { min, max } => {
+                let min: f64 = NumCast::from(min).unwrap();
+                let max: f64 = NumCast::from(max).unwrap();
+                NumCast::from(thread_rng().gen_range(min..max)).unwrap()
+            }
+            Distribution::Normal { mean, std } => {
+                let mean: f64 = NumCast::from(mean).unwrap();
+                let std: f64 = NumCast::from(std).unwrap();
+                let normal = Normal::new(mean, std).unwrap();
+                NumCast::from(thread_rng().sample(normal)).unwrap()
+            }
         }
     }
 }

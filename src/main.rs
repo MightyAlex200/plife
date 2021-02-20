@@ -1,22 +1,20 @@
-// mod serialize;
+mod serialize;
 mod simulation;
 mod util;
 mod visualization;
 
 use std::{
-    convert::TryInto,
+    fs::File,
     path::PathBuf,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
-    time::{Instant, SystemTime, UNIX_EPOCH},
+    time::Instant,
 };
 
-// use bincode::deserialize_from; TODO serialization
-// use serialize::{RulesetSerialized, SimulationSerialized}; TODO serialization
 use simulation::*;
-use structopt::{clap::arg_enum, StructOpt};
+use structopt::StructOpt;
 use visualization::*;
 use wgpu::*;
 use winit::{
@@ -26,88 +24,102 @@ use winit::{
 };
 
 #[derive(StructOpt)]
-enum RulesetSource {
-    Template { template: RulesetTemplateCLI },
-    LoadRuleset { ruleset_path: PathBuf },
-}
-
-#[derive(StructOpt)]
-enum SimulationSource {
-    New {
-        #[structopt(subcommand)]
-        ruleset: RulesetSource,
-        #[structopt(long)]
-        points: u32,
-        #[structopt(long)]
-        wall_type: WallsCLI,
-        #[structopt(long)]
-        wall_dist: Option<f32>, // TODO is there a better way to do this?
-    },
-    Load {
-        simulation_path: PathBuf,
-    },
-}
-
-#[derive(StructOpt)]
-struct HeadlessOptions {
+/// Particle life simulator
+struct Args {
+    config_file: PathBuf,
+    #[structopt(long)]
+    headless: bool,
     #[structopt(long)]
     checkpoint: Option<u64>,
     #[structopt(long)]
     steps: Option<u64>,
 }
 
-#[derive(StructOpt)]
-/// Particle life simulator
-struct RunSimulation {
-    #[structopt(flatten)]
-    simulation: SimulationSource,
-    #[structopt(long)]
-    headless: bool,
-    #[structopt(flatten)]
-    headless_options: HeadlessOptions,
+#[paw::main]
+fn main(args: Args) {
+    futures::executor::block_on(main_async(args));
 }
 
-arg_enum! {
-    enum RulesetTemplateCLI {
-        Cool,
-        Diversity,
-        Balanced,
-        Chaos,
-        Homogeneity,
-        Quiescence,
-    }
-}
+async fn main_async(args: Args) {
+    let Args {
+        config_file,
+        headless,
+        checkpoint,
+        steps,
+    } = args;
+    let instance = Instance::new(BackendBit::all());
 
-impl Into<RulesetTemplate> for RulesetTemplateCLI {
-    fn into(self) -> RulesetTemplate {
-        match self {
-            RulesetTemplateCLI::Cool => COOL_TEMPLATE,
-            RulesetTemplateCLI::Diversity => DIVERSITY_TEMPLATE,
-            RulesetTemplateCLI::Balanced => BALANCED_TEMPLATE,
-            RulesetTemplateCLI::Chaos => CHAOS_TEMPLATE,
-            RulesetTemplateCLI::Homogeneity => HOMOGENEITY_TEMPLATE,
-            RulesetTemplateCLI::Quiescence => QUIESCENCE_TEMPLATE,
+    let window_stuff = if headless {
+        None
+    } else {
+        let event_loop = EventLoop::new();
+        let window = WindowBuilder::new()
+            .with_resizable(true)
+            .with_title("plife visualization")
+            .with_inner_size(LogicalSize {
+                width: 800,
+                height: 600,
+            })
+            .build(&event_loop)
+            .expect("Failed to create window");
+        let surface = unsafe { instance.create_surface(&window) };
+        Some((window, event_loop, surface))
+    };
+
+    let adapter = instance
+        .request_adapter(&RequestAdapterOptions {
+            power_preference: PowerPreference::HighPerformance,
+            compatible_surface: window_stuff.as_ref().map(|(_, _, surface)| surface),
+        })
+        .await
+        .expect("Unable to find a suitable graphics adapter");
+    let info = adapter.get_info();
+    println!(
+        "Using {} {} ({})",
+        match info.device_type {
+            DeviceType::Other => "unclassified accelerator",
+            DeviceType::IntegratedGpu => "integrated GPU",
+            DeviceType::DiscreteGpu => "discrete GPU",
+            DeviceType::VirtualGpu => "virtualized GPU",
+            DeviceType::Cpu => "CPU",
+        },
+        info.name,
+        match info.backend {
+            Backend::Empty => "dummy backend",
+            Backend::Vulkan => "Vulkan",
+            Backend::Metal => "Metal",
+            Backend::Dx12 => "DirectX 12",
+            Backend::Dx11 => "DirectX 11",
+            Backend::Gl => "OpenGL",
+            Backend::BrowserWebGpu => "WebGPU",
         }
-    }
-}
+    );
+    let (device, queue) = adapter
+        .request_device(
+            &DeviceDescriptor {
+                label: Some("main device"),
+                features: Features::default(),
+                limits: Limits {
+                    max_uniform_buffer_binding_size: 12_582_912, // 12 MiB
+                    ..Limits::default()
+                },
+            },
+            None,
+        )
+        .await
+        .expect("Failed to get device handle");
 
-arg_enum! {
-    pub enum WallsCLI {
-        None,
-        Square,
-        Wrapping,
-    }
-}
+    let file = File::open(config_file).expect("Cannot open config file");
+    let config = serde_yaml::from_reader(file).expect("Invalid config file");
+    let simulation = Simulation::from_config(&device, config);
 
-impl TryInto<Walls> for (WallsCLI, Option<f32>) {
-    type Error = &'static str;
-    fn try_into(self) -> Result<Walls, Self::Error> {
-        match self {
-            (WallsCLI::None, _) => Ok(Walls::None),
-            (WallsCLI::Square, Some(f)) => Ok(Walls::Square(f)),
-            (WallsCLI::Wrapping, Some(f)) => Ok(Walls::Wrapping(f)),
-            _ => Err("Square and Wrapping walls require wall distance parameter."),
-        }
+    if headless {
+        run_headless(&device, &queue, simulation, checkpoint, steps)
+    } else {
+        let (window, event_loop, surface) = window_stuff.unwrap();
+        run_headed(
+            device, queue, adapter, surface, simulation, window, event_loop,
+        )
     }
 }
 
@@ -172,147 +184,5 @@ fn run_headless(
     }
 
     println!("Ran {} steps for {:#?}", steps, (Instant::now() - start));
-    println!("SAVING... PLEASE WAIT...");
-    let save_start = Instant::now();
-    let file_name: PathBuf = format!(
-        "{}.bin",
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs()
-    )
-    .into();
-    // bincode::serialize_into(
-    //     std::fs::File::create(file_name).unwrap(),
-    //     &Into::<SimulationSerialized>::into(simulation),
-    // )
-    // .unwrap(); TODO serialization
-    println!("Saved in {:#?}", Instant::now() - save_start);
-}
-
-#[paw::main]
-fn main(args: RunSimulation) {
-    futures::executor::block_on(main_async(args));
-}
-
-async fn main_async(args: RunSimulation) {
-    let RunSimulation {
-        simulation: simulation_source,
-        headless,
-        headless_options,
-    } = args;
-    let instance = Instance::new(BackendBit::all());
-
-    let window_stuff = if headless {
-        None
-    } else {
-        let event_loop = EventLoop::new();
-        let window = WindowBuilder::new()
-            .with_resizable(true)
-            .with_title("plife visualization")
-            .with_inner_size(LogicalSize {
-                width: 800,
-                height: 600,
-            })
-            .build(&event_loop)
-            .expect("Failed to create window");
-        let surface = unsafe { instance.create_surface(&window) };
-        Some((window, event_loop, surface))
-    };
-
-    let adapter = instance
-        .request_adapter(&RequestAdapterOptions {
-            power_preference: PowerPreference::HighPerformance,
-            compatible_surface: window_stuff.as_ref().map(|(_, _, surface)| surface),
-        })
-        .await
-        .expect("Unable to find a suitable graphics adapter");
-    let info = adapter.get_info();
-    println!(
-        "Using {} {} ({})",
-        match info.device_type {
-            DeviceType::Other => "unclassified accelerator",
-            DeviceType::IntegratedGpu => "integrated GPU",
-            DeviceType::DiscreteGpu => "discrete GPU",
-            DeviceType::VirtualGpu => "virtualized GPU",
-            DeviceType::Cpu => "CPU",
-        },
-        info.name,
-        match info.backend {
-            Backend::Empty => "dummy backend",
-            Backend::Vulkan => "Vulkan",
-            Backend::Metal => "Metal",
-            Backend::Dx12 => "DirectX 12",
-            Backend::Dx11 => "DirectX 11",
-            Backend::Gl => "OpenGL",
-            Backend::BrowserWebGpu => "WebGPU",
-        }
-    );
-    let (device, queue) = adapter
-        .request_device(
-            &DeviceDescriptor {
-                label: Some("main device"),
-                features: Features::default(),
-                limits: Limits {
-                    max_uniform_buffer_binding_size: 12_582_912, // 12 MiB
-                    ..Limits::default()
-                },
-            },
-            None,
-        )
-        .await
-        .expect("Failed to get device handle");
-
-    let simulation = match simulation_source {
-        SimulationSource::New {
-            ruleset,
-            points,
-            wall_type,
-            wall_dist,
-        } => {
-            let ruleset = match ruleset {
-                RulesetSource::Template { template } => {
-                    Into::<RulesetTemplate>::into(template).generate()
-                }
-                RulesetSource::LoadRuleset { ruleset_path } => {
-                    // deserialize_from::<_, RulesetSerialized>(
-                    //     std::fs::File::create(ruleset_path).unwrap(),
-                    // )
-                    // .unwrap()
-                    // .into() TODO serialization
-                    unimplemented!()
-                }
-            };
-            Simulation::new(
-                &device,
-                points,
-                ruleset,
-                (wall_type, wall_dist).try_into().unwrap(),
-            )
-        }
-        SimulationSource::Load { simulation_path } =>
-        // deserialize_from::<_, SimulationSerialized>(
-        //     std::fs::File::create(simulation_path).unwrap(),
-        // )
-        // .unwrap()
-        // .into(), TODO serialization
-        {
-            unimplemented!()
-        }
-    };
-
-    if headless {
-        run_headless(
-            &device,
-            &queue,
-            simulation,
-            headless_options.checkpoint,
-            headless_options.steps,
-        )
-    } else {
-        let (window, event_loop, surface) = window_stuff.unwrap();
-        run_headed(
-            device, queue, adapter, surface, simulation, window, event_loop,
-        )
-    }
+    // TODO: saving
 }
