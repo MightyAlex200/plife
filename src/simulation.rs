@@ -1,6 +1,6 @@
 use std::{
     io::{Cursor, Write},
-    mem::{size_of, size_of_val},
+    mem::size_of,
 };
 
 use rand::{thread_rng, Rng};
@@ -337,9 +337,11 @@ impl Simulation {
             BufferUsage::UNIFORM,
             ShaderStage::all(),
             true,
-            size_of_val(&num_points)
-                + size_of_val(&ruleset.num_point_types)
-                + size_of_val(&ruleset.friction),
+            size_of::<u32>()
+                + size_of::<PointType>()
+                + size_of::<Friction>()
+                + size_of::<u32>()
+                + size_of::<f32>(),
             |globals| {
                 let slice = globals.slice(..);
                 let mut view = slice.get_mapped_range_mut();
@@ -349,6 +351,19 @@ impl Simulation {
                     .write_all(&ruleset.num_point_types.to_le_bytes())
                     .unwrap();
                 cursor.write_all(&ruleset.friction.to_le_bytes()).unwrap();
+                let (wrapping, dist) = match walls {
+                    Walls::None => (false, 0.0),
+                    Walls::Square(dist) => (false, dist),
+                    Walls::Wrapping(dist) => (true, dist),
+                };
+                cursor
+                    .write_all(&if wrapping {
+                        1u32.to_le_bytes()
+                    } else {
+                        0u32.to_le_bytes()
+                    })
+                    .unwrap();
+                cursor.write_all(&dist.to_le_bytes()).unwrap();
             },
         );
 

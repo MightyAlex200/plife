@@ -30,6 +30,8 @@ struct Globals {
     num_points : u32;
     num_types : u32;
     friction : f32;
+    wrapping: u32;
+    dist: f32;
 };
 
 [[group(0), binding(0)]] var<storage> positions : [[access(read_write)]] Positions;
@@ -63,7 +65,23 @@ fn main() -> void {
         var pair_idx : u32 = (p_type * globals.num_types) + q_type;
         var delta : vec2<f32> = q - p;
 
-        // TODO: walls
+        if (globals.wrapping != 0u) {
+            if (delta.x > globals.dist) {
+                delta.x = delta.x - globals.dist * 2.0;
+            } else {
+                if (delta.x < -globals.dist) {
+                    delta.x = delta.x + globals.dist * 2.0;
+                }
+            }
+
+            if (delta.y > globals.dist) {
+                delta.y = delta.y - globals.dist * 2.0;
+            } else {
+                if (delta.y < -globals.dist) {
+                    delta.y = delta.y + globals.dist * 2.0;
+                }
+            }
+        }
 
         var r2 : f32 = delta.x * delta.x + delta.y * delta.y;
         var max_r : f32 = cache_max_r.data[pair_idx];
@@ -99,4 +117,44 @@ fn main() -> void {
 
     positions.data[i] = positions.data[i] + velocities.data[i];
     velocities.data[i] = velocities.data[i] * tovec(1.0 - globals.friction);
+
+    if (globals.wrapping) {
+        if (positions.data[i].x < -globals.dist) {
+            positions.data[i].x = positions.data[i].x + globals.dist * 2.0;
+        } else {
+            if (positions.data[i].x >= globals.dist) {
+                positions.data[i].x = positions.data[i].x - globals.dist * 2.0;
+            }
+        }
+
+        if (positions.data[i].y < -globals.dist) {
+            positions.data[i].y = positions.data[i].y + globals.dist * 2.0;
+        } else {
+            if (positions.data[i].y >= globals.dist) {
+                positions.data[i].y = positions.data[i].y - globals.dist * 2.0;
+            }
+        }
+    } else {
+        if (globals.dist != 0.0) {
+            if (positions.data[i].x < -globals.dist) {
+                velocities.data[i].x = -velocities.data[i].x;
+                positions.data[i].x = -globals.dist;
+            } else {
+                if (positions.data[i].x >= globals.dist) {
+                    velocities.data[i].x = -velocities.data[i].x;
+                    positions.data[i].x = globals.dist;
+                }
+            }
+
+            if (positions.data[i].y < -globals.dist) {
+                velocities.data[i].y = -velocities.data[i].y;
+                positions.data[i].y = -globals.dist;
+            } else {
+                if (positions.data[i].y >= globals.dist) {
+                    velocities.data[i].y = -velocities.data[i].y;
+                    positions.data[i].y = globals.dist;
+                }
+            }
+        }
+    }
 }
