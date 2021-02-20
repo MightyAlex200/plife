@@ -313,11 +313,22 @@ impl Visualization {
             WindowEvent::CloseRequested => {
                 *control_flow = ControlFlow::Exit;
             }
-            WindowEvent::KeyboardInput { input, .. } => {
-                if let Some(VirtualKeyCode::Escape) = input.virtual_keycode {
+            WindowEvent::KeyboardInput { input, .. } => match input.virtual_keycode {
+                Some(VirtualKeyCode::Escape) => {
                     *control_flow = ControlFlow::Exit;
                 }
-            }
+                Some(VirtualKeyCode::LBracket) => {
+                    if let Some(new_tps) = self.ticks_per_frame.checked_sub(1) {
+                        self.ticks_per_frame = new_tps;
+                    }
+                }
+                Some(VirtualKeyCode::RBracket) => {
+                    if let Some(new_tps) = self.ticks_per_frame.checked_add(1) {
+                        self.ticks_per_frame = new_tps;
+                    }
+                }
+                _ => {}
+            },
             WindowEvent::CursorMoved { position, .. } => {
                 if let Some(last_pos) = self.last_mouse_position {
                     if *mouse_down {
