@@ -186,7 +186,7 @@ impl Simulation {
     // utility
     fn generate_point_normal() -> (f32, f32) {
         let mut rng = thread_rng();
-        let normal = Normal::new(0.0, 5.0).unwrap();
+        let normal = Normal::new(0.0, 200.0).unwrap();
         (rng.sample(normal), rng.sample(normal))
     }
 
@@ -209,7 +209,12 @@ impl Simulation {
                 let mut view = slice.get_mapped_range_mut();
                 let mut cursor = Cursor::new(&mut *view);
                 for _ in 0..num_points {
-                    let point = Simulation::generate_point_uniform(500.0); // TODO Walls
+                    let point = match walls {
+                        Walls::None => Simulation::generate_point_normal(),
+                        Walls::Square(dist) | Walls::Wrapping(dist) => {
+                            Simulation::generate_point_uniform(dist)
+                        }
+                    };
                     cursor.write_all(&point.0.to_le_bytes()).unwrap();
                     cursor.write_all(&point.1.to_le_bytes()).unwrap();
                 }
