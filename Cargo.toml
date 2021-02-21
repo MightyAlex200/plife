@@ -1,6 +1,6 @@
 [package]
 name = "plife"
-version = "0.1.0"
+version = "1.0.0"
 authors = ["Taylor <quantumtraveling@gmail.com>"]
 edition = "2018"
 
@@ -11,6 +11,10 @@ rand = "0.8"
 rand_distr = "0.4"
 structopt = { version = "0.3", features = [ "paw" ] }
 paw = "1.0"
-ggez = { git = "https://github.com/ggez/ggez", branch = "devel" }
-glam = "0.12"
-rayon = "1.5"
+wgpu = "0.7"
+futures = "0.3"
+winit = "0.24"
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.8"
+ctrlc = "3.1"
+async-executor = "1.4"

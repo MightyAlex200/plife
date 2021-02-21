@@ -1,0 +1,31 @@
+---
+ruleset:
+  types: 50
+  attractions:
+    mean: -0.01
+    std: 0.04
+  min_r:
+    min: 0.0
+    max: 20.0
+  max_r:
+    min: 10.0
+    max: 500.0
+  friction: 0.05
+walls:
+  type: wrapping
+  dist: 10000.0
+points:
+  - num: 500
+    x:
+      min: -10000.0
+      max: 10000.0
+    y:
+      min: -10000.0
+      max: 10000.0
+  - num: 1500
+    x:
+      mean: 0.0
+      std: 500.0
+    y:
+      mean: 0.0
+      std: 500.0
