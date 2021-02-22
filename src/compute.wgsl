@@ -37,10 +37,10 @@ struct Globals {
 [[group(0), binding(0)]] var<storage> positions : [[access(read_write)]] Positions;
 [[group(0), binding(1)]] var<storage> positions_old : [[access(read)]] Positions;
 [[group(0), binding(2)]] var<storage> velocities : [[access(read_write)]] Velocities;
-[[group(0), binding(3)]] var<uniform> types : Types;
-[[group(0), binding(4)]] var<uniform> cache_max_r : CacheRadius;
-[[group(0), binding(5)]] var<uniform> cache_min_r : CacheRadius;
-[[group(0), binding(6)]] var<uniform> cache_attraction : CacheAttraction;
+[[group(0), binding(3)]] var<storage> types : [[access(read)]] Types;
+[[group(0), binding(4)]] var<storage> cache_max_r : [[access(read)]] CacheRadius;
+[[group(0), binding(5)]] var<storage> cache_min_r : [[access(read)]] CacheRadius;
+[[group(0), binding(6)]] var<storage> cache_attraction : [[access(read)]] CacheAttraction;
 [[group(0), binding(7)]] var<uniform> globals : Globals;
 
 [[builtin(global_invocation_id)]] var<in> global_invocation_id : vec3<u32>;

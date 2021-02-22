@@ -51,9 +51,9 @@ impl Visualization {
     ) -> Self {
         let colors = BindableBuffer::new(
             &device,
-            BufferUsage::UNIFORM,
+            BufferUsage::STORAGE,
             ShaderStage::VERTEX,
-            true,
+            false,
             simulation.ruleset.num_point_types as usize * VEC3_SIZE,
             |colors| {
                 let slice = colors.slice(..);

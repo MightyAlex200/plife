@@ -100,7 +100,7 @@ async fn main_async(args: Args) {
                 label: Some("main device"),
                 features: Features::default(),
                 limits: Limits {
-                    max_uniform_buffer_binding_size: 12_582_912, // 12 MiB
+                    max_storage_buffers_per_shader_stage: 7,
                     ..Limits::default()
                 },
             },

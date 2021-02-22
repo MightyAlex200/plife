@@ -98,9 +98,9 @@ impl Simulation {
         let types_vec = types_vec;
         let types = BindableBuffer::new(
             &device,
-            BufferUsage::UNIFORM,
+            BufferUsage::STORAGE,
             ShaderStage::all(),
-            true,
+            false,
             num_points as usize * size_of::<PointType>(),
             |types: &mut Buffer| {
                 let slice = types.slice(..);
@@ -117,9 +117,9 @@ impl Simulation {
 
         let cache_max_r = BindableBuffer::new(
             &device,
-            BufferUsage::UNIFORM,
+            BufferUsage::STORAGE,
             ShaderStage::COMPUTE,
-            true,
+            false,
             num_type_pairs as usize * size_of::<Radius>(),
             |cache_max_r: &mut Buffer| {
                 let slice = cache_max_r.slice(..);
@@ -137,9 +137,9 @@ impl Simulation {
 
         let cache_min_r = BindableBuffer::new(
             &device,
-            BufferUsage::UNIFORM,
+            BufferUsage::STORAGE,
             ShaderStage::COMPUTE,
-            true,
+            false,
             num_type_pairs as usize * size_of::<Radius>(),
             |cache_min_r: &mut Buffer| {
                 let slice = cache_min_r.slice(..);
@@ -157,9 +157,9 @@ impl Simulation {
 
         let cache_attraction = BindableBuffer::new(
             &device,
-            BufferUsage::UNIFORM,
+            BufferUsage::STORAGE,
             ShaderStage::COMPUTE,
-            true,
+            false,
             num_type_pairs as usize * size_of::<Attraction>(),
             |cache_attraction: &mut Buffer| {
                 let slice = cache_attraction.slice(..);
