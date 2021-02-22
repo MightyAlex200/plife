@@ -282,5 +282,6 @@ impl Simulation {
         drop(compute_pass);
         let cmd = encoder.finish();
         queue.submit(Some(cmd));
+        device.poll(Maintain::Wait);
     }
 }
